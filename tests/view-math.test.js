@@ -34,11 +34,20 @@ const wideSector = ViewMath.sectorPath(120, 180);
 assert.notEqual(narrowSector, wideSector);
 assert.match(narrowSector, /^M 0 0 L /);
 
+assert.deepEqual(
+  ViewMath.clampGroupDelta([{ x: 50, y: 40 }, { x: 80, y: 90 }], -100, 200, 300, 200),
+  { x: -50, y: 110 },
+);
+
 const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
 const requiredIds = [
   "camera-tool",
+  "element-scale",
+  "element-scale-value",
   "camera-properties",
-  "camera-list",
+  "object-list",
+  "pole-tool",
+  "mount-tool",
   "camera-name",
   "camera-model",
   "camera-ip",
@@ -46,6 +55,13 @@ const requiredIds = [
   "camera-fov",
   "camera-fov-number",
   "close-properties",
+  "mount-properties",
+  "mount-name",
+  "add-mounted-camera",
+  "mount-camera-menu",
+  "add-new-mounted-camera",
+  "free-camera-list",
+  "detach-camera",
   "objects-layer",
 ];
 requiredIds.forEach((id) => assert.match(html, new RegExp(`id="${id}"`)));

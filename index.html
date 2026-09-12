@@ -14,6 +14,11 @@
           <span class="document-status__separator" aria-hidden="true">·</span>
           <span id="zoom-status">Масштаб: —</span>
         </div>
+        <label class="element-scale-control" for="element-scale">
+          <span>Размер элементов</span>
+          <input id="element-scale" type="range" min="50" max="300" step="10" value="100">
+          <output id="element-scale-value" for="element-scale">100%</output>
+        </label>
         <div class="toolbar__actions">
           <label class="button button--primary" for="map-file">Загрузить карту</label>
           <input id="map-file" class="visually-hidden" type="file"
@@ -35,12 +40,26 @@
                 <small>Добавить на карту</small>
               </span>
             </button>
+            <button id="pole-tool" class="element-tool" type="button" aria-pressed="false" disabled>
+              <span class="element-tool__icon element-tool__icon--pole" aria-hidden="true">⊕</span>
+              <span>
+                <strong>Столб</strong>
+                <small>Добавить на карту</small>
+              </span>
+            </button>
+            <button id="mount-tool" class="element-tool" type="button" aria-pressed="false" disabled>
+              <span class="element-tool__icon element-tool__icon--mount" aria-hidden="true">◆</span>
+              <span>
+                <strong>Точка крепления</strong>
+                <small>Для стены или угла</small>
+              </span>
+            </button>
           </section>
 
-          <section class="sidebar__section camera-list-section">
+          <section class="sidebar__section object-list-section">
             <h2>На карте</h2>
-            <div id="camera-list" class="camera-list">
-              <p class="camera-list__empty">Камер пока нет</p>
+            <div id="object-list" class="object-list">
+              <p class="object-list__empty">Элементов пока нет</p>
             </div>
           </section>
 
@@ -75,8 +94,37 @@
                 </div>
               </div>
             </div>
+            <div id="camera-mount-row" class="mount-link" hidden>
+              <span>Крепление</span>
+              <strong id="camera-mount-name"></strong>
+              <button id="detach-camera" type="button">Отвязать</button>
+            </div>
             <p class="properties__hint">Перетащите камеру для перемещения. Круглый маркер меняет направление.</p>
             <button id="close-properties" class="button button--primary properties__done" type="button">ОК</button>
+          </section>
+
+          <section id="mount-properties" class="sidebar__section properties" hidden>
+            <div class="properties__heading">
+              <div>
+                <h2 id="mount-properties-title">Крепление</h2>
+                <small id="mount-properties-type" class="properties__type"></small>
+              </div>
+              <button id="delete-mount" class="icon-button" type="button" title="Удалить крепление" aria-label="Удалить крепление">×</button>
+            </div>
+            <label class="field">
+              <span>Название</span>
+              <input id="mount-name" type="text" autocomplete="off">
+            </label>
+            <div class="mount-camera-picker">
+              <button id="add-mounted-camera" class="button mount-camera-button" type="button" aria-expanded="false">+ Добавить камеру</button>
+              <div id="mount-camera-menu" class="mount-camera-menu" hidden>
+                <button id="add-new-mounted-camera" class="mount-camera-menu__new" type="button">Новая камера</button>
+                <span class="mount-camera-menu__label">Свободные камеры</span>
+                <div id="free-camera-list" class="free-camera-list"></div>
+              </div>
+            </div>
+            <p class="properties__hint">Камеры сохраняют своё расположение и перемещаются вместе с креплением.</p>
+            <button id="close-mount-properties" class="button button--primary properties__done" type="button">ОК</button>
           </section>
         </aside>
 
