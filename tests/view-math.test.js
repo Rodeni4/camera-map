@@ -39,6 +39,13 @@ assert.deepEqual(
   { x: -50, y: 110 },
 );
 
+const lanesAtHalfZoom = [0, 1, 2].map((index) => ViewMath.cableLaneOffset(index, 3, 0.5));
+const lanesAtDoubleZoom = [0, 1, 2].map((index) => ViewMath.cableLaneOffset(index, 3, 2));
+assert.deepEqual(lanesAtHalfZoom, [-10, 0, 10]);
+assert.deepEqual(lanesAtDoubleZoom, [-2.5, 0, 2.5]);
+assert.equal((lanesAtHalfZoom[1] - lanesAtHalfZoom[0]) * 0.5, 5);
+assert.equal((lanesAtDoubleZoom[1] - lanesAtDoubleZoom[0]) * 2, 5);
+
 const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
 const requiredIds = [
   "camera-tool",
@@ -48,6 +55,8 @@ const requiredIds = [
   "object-list",
   "pole-tool",
   "mount-tool",
+  "cabinet-tool",
+  "cable-tool",
   "camera-name",
   "camera-model",
   "camera-ip",
@@ -61,6 +70,11 @@ const requiredIds = [
   "mount-camera-menu",
   "add-new-mounted-camera",
   "free-camera-list",
+  "cabinet-properties",
+  "cabinet-name",
+  "cable-properties",
+  "cable-name",
+  "cable-type",
   "detach-camera",
   "objects-layer",
 ];

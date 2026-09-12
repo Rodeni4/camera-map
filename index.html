@@ -54,6 +54,20 @@
                 <small>Для стены или угла</small>
               </span>
             </button>
+            <button id="cabinet-tool" class="element-tool" type="button" aria-pressed="false" disabled>
+              <span class="element-tool__icon element-tool__icon--cabinet" aria-hidden="true">▦</span>
+              <span>
+                <strong>Шкаф</strong>
+                <small>Конечная точка кабеля</small>
+              </span>
+            </button>
+            <button id="cable-tool" class="element-tool" type="button" aria-pressed="false" disabled>
+              <span class="element-tool__icon element-tool__icon--cable" aria-hidden="true">╱</span>
+              <span>
+                <strong>Кабель</strong>
+                <small>Проложить маршрут</small>
+              </span>
+            </button>
           </section>
 
           <section class="sidebar__section object-list-section">
@@ -125,6 +139,36 @@
             </div>
             <p class="properties__hint">Камеры сохраняют своё расположение и перемещаются вместе с креплением.</p>
             <button id="close-mount-properties" class="button button--primary properties__done" type="button">ОК</button>
+          </section>
+
+          <section id="cabinet-properties" class="sidebar__section properties" hidden>
+            <div class="properties__heading">
+              <h2>Шкаф</h2>
+              <button id="delete-cabinet" class="icon-button" type="button" title="Удалить шкаф" aria-label="Удалить шкаф">×</button>
+            </div>
+            <label class="field">
+              <span>Название</span>
+              <input id="cabinet-name" type="text" autocomplete="off">
+            </label>
+            <p class="properties__hint">Шкаф служит конечной точкой витой пары и оптического кабеля.</p>
+            <button id="close-cabinet-properties" class="button button--primary properties__done" type="button">ОК</button>
+          </section>
+
+          <section id="cable-properties" class="sidebar__section properties" hidden>
+            <div class="properties__heading">
+              <h2>Кабель</h2>
+              <button id="delete-cable" class="icon-button" type="button" title="Удалить кабель" aria-label="Удалить кабель">×</button>
+            </div>
+            <label class="field">
+              <span>Название</span>
+              <input id="cable-name" type="text" autocomplete="off">
+            </label>
+            <div class="cable-info">
+              <span>Тип</span><strong id="cable-type"></strong>
+              <span>Начало</span><strong id="cable-source"></strong>
+              <span>Конец</span><strong id="cable-target"></strong>
+            </div>
+            <button id="close-cable-properties" class="button button--primary properties__done" type="button">ОК</button>
           </section>
         </aside>
 

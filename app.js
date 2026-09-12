@@ -49,6 +49,10 @@
         y: Math.min(maxDy, Math.max(minDy, dy)),
       };
     },
+
+    cableLaneOffset(index, count, viewScale, gap = 5) {
+      return (index - (count - 1) / 2) * gap / viewScale;
+    },
   };
 
   if (typeof module !== "undefined" && module.exports) module.exports = AppMath;
@@ -71,6 +75,8 @@
     cameraTool: document.querySelector("#camera-tool"),
     poleTool: document.querySelector("#pole-tool"),
     mountTool: document.querySelector("#mount-tool"),
+    cabinetTool: document.querySelector("#cabinet-tool"),
+    cableTool: document.querySelector("#cable-tool"),
     objectList: document.querySelector("#object-list"),
     cameraProperties: document.querySelector("#camera-properties"),
     nameInput: document.querySelector("#camera-name"),
@@ -94,6 +100,17 @@
     freeCameraList: document.querySelector("#free-camera-list"),
     deleteMount: document.querySelector("#delete-mount"),
     closeMountProperties: document.querySelector("#close-mount-properties"),
+    cabinetProperties: document.querySelector("#cabinet-properties"),
+    cabinetNameInput: document.querySelector("#cabinet-name"),
+    deleteCabinet: document.querySelector("#delete-cabinet"),
+    closeCabinetProperties: document.querySelector("#close-cabinet-properties"),
+    cableProperties: document.querySelector("#cable-properties"),
+    cableNameInput: document.querySelector("#cable-name"),
+    cableType: document.querySelector("#cable-type"),
+    cableSource: document.querySelector("#cable-source"),
+    cableTarget: document.querySelector("#cable-target"),
+    deleteCable: document.querySelector("#delete-cable"),
+    closeCableProperties: document.querySelector("#close-cable-properties"),
   };
 
   const state = {
@@ -110,16 +127,25 @@
     lastPointer: { x: 0, y: 0 },
     cameras: [],
     mounts: [],
+    cabinets: [],
+    cables: [],
     nextCameraId: 1,
     nextMountId: 1,
     nextPoleNumber: 1,
     nextPointNumber: 1,
+    nextCabinetId: 1,
+    nextCableId: 1,
+    nextCopperNumber: 1,
+    nextFiberNumber: 1,
     selectedCameraId: null,
     selectedMountId: null,
+    selectedCabinetId: null,
+    selectedCableId: null,
     activeTool: null,
     cameraMountId: null,
     objectInteraction: null,
     snapTargetId: null,
+    cableDraft: null,
   };
 
   const SVG_NS = "http://www.w3.org/2000/svg";
@@ -134,6 +160,14 @@
 
   function getMount(id) {
     return state.mounts.find((mount) => mount.id === id) || null;
+  }
+
+  function getCabinet(id) {
+    return state.cabinets.find((cabinet) => cabinet.id === id) || null;
+  }
+
+  function getCable(id) {
+    return state.cables.find((cable) => cable.id === id) || null;
   }
 
   function mountTypeName(type) {
@@ -157,6 +191,7 @@
     state.fitted = true;
     state.workspaceSize = { width: rect.width, height: rect.height };
     renderView();
+    renderObjects();
   }
 
   function makeSvg(name, attributes = {}) {
@@ -183,6 +218,104 @@
     line.style.width = `${Math.hypot(dx, dy)}px`;
     line.style.transform = `rotate(${Math.atan2(dy, dx) * 180 / Math.PI}deg)`;
     elements.objectsLayer.append(line);
+  }
+
+  function routeNode(kind, id) {
+    if (kind === "camera") {
+      const camera = getCamera(id);
+      return camera ? { key: `camera:${id}`, x: camera.x, y: camera.y } : null;
+    }
+    if (kind === "cabinet") {
+      const cabinet = getCabinet(id);
+      return cabinet ? { key: `cabinet:${id}`, x: cabinet.x, y: cabinet.y } : null;
+    }
+    const mount = getMount(id);
+    return mount ? { key: `mount:${id}`, x: mount.x, y: mount.y } : null;
+  }
+
+  function cableRouteNodes(cable) {
+    const nodes = [routeNode(cable.sourceKind, cable.sourceId)];
+    cable.viaMountIds.forEach((id) => nodes.push(routeNode("mount", id)));
+    if (cable.targetCabinetId) nodes.push(routeNode("cabinet", cable.targetCabinetId));
+    return nodes.filter(Boolean).filter((node, index, all) => index === 0 || node.key !== all[index - 1].key);
+  }
+
+  function cableTypeName(type) {
+    return type === "copper" ? "Витая пара уличная" : "Оптоволокно";
+  }
+
+  function buildCableLanes() {
+    const groups = new Map();
+    state.cables.forEach((cable) => {
+      const nodes = cableRouteNodes(cable);
+      for (let index = 0; index < nodes.length - 1; index += 1) {
+        const pair = [nodes[index].key, nodes[index + 1].key].sort();
+        const key = pair.join("|");
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(cable.id);
+      }
+    });
+    groups.forEach((ids) => ids.sort());
+    return groups;
+  }
+
+  function appendCableSegment(svg, cable, start, end, laneIds) {
+    const distance = Math.hypot(end.x - start.x, end.y - start.y);
+    if (!distance) return;
+    const laneOffset = AppMath.cableLaneOffset(
+      laneIds.indexOf(cable.id),
+      laneIds.length,
+      state.view.scale,
+    );
+    const direction = start.key < end.key ? 1 : -1;
+    const offsetX = -(end.y - start.y) / distance * laneOffset * direction;
+    const offsetY = (end.x - start.x) / distance * laneOffset * direction;
+    const pathData = `M ${start.x + offsetX} ${start.y + offsetY} L ${end.x + offsetX} ${end.y + offsetY}`;
+
+    const segmentKey = [start.key, end.key].sort().join("|");
+    const line = makeSvg("path", {
+      d: pathData,
+      "data-cable-id": cable.id,
+      "data-segment-key": segmentKey,
+    });
+    line.classList.add("cable-line", `cable-line--${cable.type}`);
+    if (cable.id === state.selectedCableId) line.classList.add("is-selected");
+    svg.append(line);
+
+    const hit = makeSvg("path", { d: pathData, "data-cable-id": cable.id });
+    hit.classList.add("cable-hit");
+    svg.append(hit);
+  }
+
+  function appendCables() {
+    const svg = makeSvg("svg", {
+      viewBox: `0 0 ${Math.max(1, state.imageWidth)} ${Math.max(1, state.imageHeight)}`,
+      preserveAspectRatio: "none",
+    });
+    svg.classList.add("cables-layer");
+    const lanes = buildCableLanes();
+
+    state.cables.forEach((cable) => {
+      const nodes = cableRouteNodes(cable);
+      for (let index = 0; index < nodes.length - 1; index += 1) {
+        const start = nodes[index];
+        const end = nodes[index + 1];
+        const key = [start.key, end.key].sort().join("|");
+        appendCableSegment(svg, cable, start, end, lanes.get(key) || [cable.id]);
+      }
+    });
+
+    if (state.cableDraft) {
+      const nodes = cableRouteNodes(state.cableDraft);
+      for (let index = 0; index < nodes.length - 1; index += 1) {
+        const path = makeSvg("path", {
+          d: `M ${nodes[index].x} ${nodes[index].y} L ${nodes[index + 1].x} ${nodes[index + 1].y}`,
+        });
+        path.classList.add("cable-line", `cable-line--${state.cableDraft.type}`, "is-draft");
+        svg.append(path);
+      }
+    }
+    elements.objectsLayer.append(svg);
   }
 
   function appendCamera(camera) {
@@ -268,8 +401,28 @@
     elements.objectsLayer.append(object);
   }
 
+  function appendCabinet(cabinet) {
+    const object = document.createElement("div");
+    object.className = "cabinet-object";
+    if (cabinet.id === state.selectedCabinetId) object.classList.add("is-selected");
+    object.style.left = `${cabinet.x}px`;
+    object.style.top = `${cabinet.y}px`;
+
+    const control = document.createElement("button");
+    control.type = "button";
+    control.className = "cabinet-control";
+    control.dataset.cabinetId = cabinet.id;
+    control.setAttribute("aria-label", cabinet.name);
+    const tooltip = document.createElement("div");
+    tooltip.className = "cabinet-tooltip";
+    tooltip.textContent = cabinet.name;
+    object.append(control, tooltip);
+    elements.objectsLayer.append(object);
+  }
+
   function renderObjects() {
     elements.objectsLayer.replaceChildren();
+    appendCables();
 
     state.cameras.forEach((camera) => {
       const mount = getMount(camera.mountId);
@@ -278,6 +431,7 @@
     });
     state.cameras.forEach(appendCamera);
     state.mounts.forEach(appendMount);
+    state.cabinets.forEach(appendCabinet);
   }
 
   function makeListCamera(camera, index) {
@@ -328,9 +482,59 @@
     return item;
   }
 
+  function makeListCabinet(cabinet) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "object-list__cabinet";
+    if (cabinet.id === state.selectedCabinetId) item.classList.add("is-selected");
+    item.dataset.cabinetId = cabinet.id;
+    item.addEventListener("click", () => {
+      setActiveTool(null);
+      selectCabinet(cabinet.id);
+      ensurePointVisible(cabinet);
+      revealProperties(elements.cabinetProperties);
+    });
+    const name = document.createElement("span");
+    name.className = "object-list__name";
+    name.textContent = cabinet.name || "Без названия";
+    const type = document.createElement("span");
+    type.className = "object-list__type";
+    type.textContent = "шкаф";
+    item.append(name, type);
+    return item;
+  }
+
+  function endpointName(kind, id) {
+    if (kind === "camera") return getCamera(id)?.name || "Камера удалена";
+    return getCabinet(id)?.name || "Шкаф удалён";
+  }
+
+  function makeListCable(cable) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "object-list__cable";
+    if (cable.id === state.selectedCableId) item.classList.add("is-selected");
+    item.dataset.cableId = cable.id;
+    item.addEventListener("click", () => {
+      setActiveTool(null);
+      selectCable(cable.id);
+      revealProperties(elements.cableProperties);
+    });
+    const name = document.createElement("span");
+    name.className = "object-list__name";
+    name.textContent = cable.name || cableTypeName(cable.type);
+    const swatch = document.createElement("span");
+    swatch.className = `cable-swatch cable-swatch--${cable.type}`;
+    const detail = document.createElement("span");
+    detail.className = "object-list__detail";
+    detail.textContent = `${endpointName(cable.sourceKind, cable.sourceId)} → ${endpointName("cabinet", cable.targetCabinetId)}`;
+    item.append(name, swatch, detail);
+    return item;
+  }
+
   function renderObjectList() {
     elements.objectList.replaceChildren();
-    if (!state.mounts.length && !state.cameras.length) {
+    if (!state.mounts.length && !state.cameras.length && !state.cabinets.length && !state.cables.length) {
       const empty = document.createElement("p");
       empty.className = "object-list__empty";
       empty.textContent = "Элементов пока нет";
@@ -362,13 +566,45 @@
       freeCameras.forEach((camera) => group.append(makeListCamera(camera, state.cameras.indexOf(camera))));
       elements.objectList.append(group);
     }
+
+    if (state.cabinets.length) {
+      const group = document.createElement("div");
+      group.className = "object-list__group";
+      const heading = document.createElement("div");
+      heading.className = "object-list__mount";
+      const name = document.createElement("span");
+      name.className = "object-list__name";
+      name.textContent = "Шкафы";
+      heading.append(name);
+      group.append(heading);
+      state.cabinets.forEach((cabinet) => group.append(makeListCabinet(cabinet)));
+      elements.objectList.append(group);
+    }
+
+    if (state.cables.length) {
+      const group = document.createElement("div");
+      group.className = "object-list__group";
+      const heading = document.createElement("div");
+      heading.className = "object-list__mount";
+      const name = document.createElement("span");
+      name.className = "object-list__name";
+      name.textContent = "Кабели";
+      heading.append(name);
+      group.append(heading);
+      state.cables.forEach((cable) => group.append(makeListCable(cable)));
+      elements.objectList.append(group);
+    }
   }
 
   function syncProperties() {
     const camera = getCamera(state.selectedCameraId);
     const mount = getMount(state.selectedMountId);
+    const cabinet = getCabinet(state.selectedCabinetId);
+    const cable = getCable(state.selectedCableId);
     elements.cameraProperties.hidden = !camera;
     elements.mountProperties.hidden = !mount;
+    elements.cabinetProperties.hidden = !cabinet;
+    elements.cableProperties.hidden = !cable;
 
     if (camera) {
       elements.nameInput.value = camera.name;
@@ -387,6 +623,15 @@
       elements.mountPropertiesType.textContent = mount.type === "pole" ? "Опора для одной или нескольких камер" : "Крепление на здании";
       elements.mountNameInput.value = mount.name;
     }
+
+    if (cabinet) elements.cabinetNameInput.value = cabinet.name;
+
+    if (cable) {
+      elements.cableNameInput.value = cable.name;
+      elements.cableType.textContent = cableTypeName(cable.type);
+      elements.cableSource.textContent = endpointName(cable.sourceKind, cable.sourceId);
+      elements.cableTarget.textContent = endpointName("cabinet", cable.targetCabinetId);
+    }
   }
 
   function refreshEditor() {
@@ -399,6 +644,8 @@
     hideMountCameraMenu();
     state.selectedCameraId = id;
     state.selectedMountId = null;
+    state.selectedCabinetId = null;
+    state.selectedCableId = null;
     refreshEditor();
   }
 
@@ -406,6 +653,26 @@
     hideMountCameraMenu();
     state.selectedMountId = id;
     state.selectedCameraId = null;
+    state.selectedCabinetId = null;
+    state.selectedCableId = null;
+    refreshEditor();
+  }
+
+  function selectCabinet(id) {
+    hideMountCameraMenu();
+    state.selectedCabinetId = id;
+    state.selectedCameraId = null;
+    state.selectedMountId = null;
+    state.selectedCableId = null;
+    refreshEditor();
+  }
+
+  function selectCable(id) {
+    hideMountCameraMenu();
+    state.selectedCableId = id;
+    state.selectedCameraId = null;
+    state.selectedMountId = null;
+    state.selectedCabinetId = null;
     refreshEditor();
   }
 
@@ -413,6 +680,8 @@
     hideMountCameraMenu();
     state.selectedCameraId = null;
     state.selectedMountId = null;
+    state.selectedCabinetId = null;
+    state.selectedCableId = null;
     refreshEditor();
   }
 
@@ -471,19 +740,30 @@
   }
 
   function setActiveTool(tool, cameraMountId = null) {
+    const clearedCableDraft = tool !== "cable" && Boolean(state.cableDraft);
+    if (clearedCableDraft) state.cableDraft = null;
     state.activeTool = tool && state.imageWidth ? tool : null;
     state.cameraMountId = state.activeTool === "camera" ? cameraMountId : null;
     elements.cameraTool.setAttribute("aria-pressed", String(state.activeTool === "camera"));
     elements.poleTool.setAttribute("aria-pressed", String(state.activeTool === "pole"));
     elements.mountTool.setAttribute("aria-pressed", String(state.activeTool === "point"));
+    elements.cabinetTool.setAttribute("aria-pressed", String(state.activeTool === "cabinet"));
+    elements.cableTool.setAttribute("aria-pressed", String(state.activeTool === "cable"));
     elements.workspace.classList.toggle("is-placing", Boolean(state.activeTool));
     elements.placementHint.hidden = !state.activeTool;
-    if (!state.activeTool) return;
+    if (!state.activeTool) {
+      if (clearedCableDraft) renderObjects();
+      return;
+    }
 
     if (state.activeTool === "pole") {
       elements.placementHint.textContent = "Щёлкните по карте, чтобы поставить столб";
     } else if (state.activeTool === "point") {
       elements.placementHint.textContent = "Щёлкните по стене или углу здания";
+    } else if (state.activeTool === "cabinet") {
+      elements.placementHint.textContent = "Щёлкните по карте, чтобы поставить шкаф";
+    } else if (state.activeTool === "cable") {
+      updateCablePlacementHint();
     } else {
       const mount = getMount(state.cameraMountId);
       elements.placementHint.textContent = mount
@@ -532,6 +812,109 @@
     state.mounts.push(mount);
     setActiveTool(null);
     selectMount(mount.id);
+  }
+
+  function addCabinet(point) {
+    const number = state.nextCabinetId++;
+    const cabinet = {
+      id: `cabinet${number}`,
+      name: `Шкаф ${number}`,
+      x: point.x,
+      y: point.y,
+    };
+    state.cabinets.push(cabinet);
+    setActiveTool(null);
+    selectCabinet(cabinet.id);
+  }
+
+  function updateCablePlacementHint(message = "") {
+    if (message) {
+      elements.placementHint.textContent = message;
+      return;
+    }
+    const draft = state.cableDraft;
+    if (!draft) {
+      elements.placementHint.textContent = "Выберите камеру для витой пары или шкаф для оптики";
+    } else if (draft.type === "copper") {
+      elements.placementHint.textContent = "Выбирайте столбы и точки, затем конечный шкаф";
+    } else {
+      elements.placementHint.textContent = "Выбирайте столбы и точки, затем другой шкаф";
+    }
+  }
+
+  function startCable(kind, id) {
+    if (kind === "camera") {
+      const camera = getCamera(id);
+      if (!camera) return;
+      state.cableDraft = {
+        type: "copper",
+        sourceKind: "camera",
+        sourceId: camera.id,
+        viaMountIds: getMount(camera.mountId) ? [camera.mountId] : [],
+        targetCabinetId: null,
+      };
+    } else {
+      const cabinet = getCabinet(id);
+      if (!cabinet) return;
+      state.cableDraft = {
+        type: "fiber",
+        sourceKind: "cabinet",
+        sourceId: cabinet.id,
+        viaMountIds: [],
+        targetCabinetId: null,
+      };
+    }
+    updateCablePlacementHint();
+    renderObjects();
+  }
+
+  function finishCable(targetCabinetId) {
+    const draft = state.cableDraft;
+    const target = getCabinet(targetCabinetId);
+    if (!draft || !target) return;
+    if (draft.type === "fiber" && draft.sourceId === target.id) {
+      updateCablePlacementHint("Для оптики выберите другой шкаф");
+      return;
+    }
+
+    const number = draft.type === "copper" ? state.nextCopperNumber++ : state.nextFiberNumber++;
+    const cable = {
+      id: `cable${state.nextCableId++}`,
+      name: draft.type === "copper" ? `Витая пара ${number}` : `Оптика ${number}`,
+      type: draft.type,
+      sourceKind: draft.sourceKind,
+      sourceId: draft.sourceId,
+      viaMountIds: [...draft.viaMountIds],
+      targetCabinetId: target.id,
+    };
+    state.cables.push(cable);
+    setActiveTool(null);
+    selectCable(cable.id);
+  }
+
+  function handleCableNode(kind, id) {
+    if (!state.cableDraft) {
+      if (kind === "camera" || kind === "cabinet") startCable(kind, id);
+      else updateCablePlacementHint("Сначала выберите камеру или шкаф");
+      return;
+    }
+
+    if (kind === "mount") {
+      const via = state.cableDraft.viaMountIds;
+      if (via[via.length - 1] !== id) via.push(id);
+      updateCablePlacementHint();
+      renderObjects();
+      return;
+    }
+
+    if (kind === "cabinet") {
+      finishCable(id);
+      return;
+    }
+
+    updateCablePlacementHint(state.cableDraft.type === "copper"
+      ? "Витая пара уже начата: выберите опоры или шкаф"
+      : "Оптика уже начата: выберите опоры или другой шкаф");
   }
 
   function nearestMount(x, y) {
@@ -594,7 +977,7 @@
       state.imageUrl = nextUrl;
       state.imageWidth = decoded.naturalWidth;
       state.imageHeight = decoded.naturalHeight;
-      [...state.mounts, ...state.cameras].forEach((object) => {
+      [...state.mounts, ...state.cameras, ...state.cabinets].forEach((object) => {
         object.x = clamp(object.x, 0, state.imageWidth);
         object.y = clamp(object.y, 0, state.imageHeight);
       });
@@ -610,6 +993,8 @@
       elements.cameraTool.disabled = false;
       elements.poleTool.disabled = false;
       elements.mountTool.disabled = false;
+      elements.cabinetTool.disabled = false;
+      elements.cableTool.disabled = false;
       elements.status.textContent = `${file.name} · ${state.imageWidth} × ${state.imageHeight} px`;
       renderObjects();
       renderObjectList();
@@ -660,6 +1045,16 @@
     clearSelection();
     setActiveTool(active ? null : "point");
   });
+  elements.cabinetTool.addEventListener("click", () => {
+    const active = state.activeTool === "cabinet";
+    clearSelection();
+    setActiveTool(active ? null : "cabinet");
+  });
+  elements.cableTool.addEventListener("click", () => {
+    const active = state.activeTool === "cable";
+    clearSelection();
+    setActiveTool(active ? null : "cable");
+  });
 
   elements.nameInput.addEventListener("input", (event) => updateCamera("name", event.target.value));
   elements.modelInput.addEventListener("input", (event) => updateCamera("model", event.target.value));
@@ -687,7 +1082,9 @@
   });
 
   elements.deleteCamera.addEventListener("click", () => {
-    state.cameras = state.cameras.filter((camera) => camera.id !== state.selectedCameraId);
+    const cameraId = state.selectedCameraId;
+    state.cameras = state.cameras.filter((camera) => camera.id !== cameraId);
+    state.cables = state.cables.filter((cable) => !(cable.sourceKind === "camera" && cable.sourceId === cameraId));
     state.selectedCameraId = null;
     refreshEditor();
   });
@@ -727,21 +1124,84 @@
       if (camera.mountId === mountId) camera.mountId = null;
     });
     state.mounts = state.mounts.filter((mount) => mount.id !== mountId);
+    state.cables.forEach((cable) => {
+      cable.viaMountIds = cable.viaMountIds.filter((id) => id !== mountId);
+    });
     state.selectedMountId = null;
     refreshEditor();
   });
   elements.closeMountProperties.addEventListener("click", clearSelection);
+
+  elements.cabinetNameInput.addEventListener("input", (event) => {
+    const cabinet = getCabinet(state.selectedCabinetId);
+    if (!cabinet) return;
+    cabinet.name = event.target.value;
+    renderObjects();
+    renderObjectList();
+  });
+  elements.deleteCabinet.addEventListener("click", () => {
+    const cabinetId = state.selectedCabinetId;
+    state.cabinets = state.cabinets.filter((cabinet) => cabinet.id !== cabinetId);
+    state.cables = state.cables.filter((cable) =>
+      cable.targetCabinetId !== cabinetId && !(cable.sourceKind === "cabinet" && cable.sourceId === cabinetId));
+    state.selectedCabinetId = null;
+    refreshEditor();
+  });
+  elements.closeCabinetProperties.addEventListener("click", clearSelection);
+
+  elements.cableNameInput.addEventListener("input", (event) => {
+    const cable = getCable(state.selectedCableId);
+    if (!cable) return;
+    cable.name = event.target.value;
+    renderObjectList();
+  });
+  elements.deleteCable.addEventListener("click", () => {
+    state.cables = state.cables.filter((cable) => cable.id !== state.selectedCableId);
+    state.selectedCableId = null;
+    refreshEditor();
+  });
+  elements.closeCableProperties.addEventListener("click", clearSelection);
 
   elements.objectsLayer.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
     const rotationHandle = event.target.closest(".rotation-handle");
     const cameraControl = event.target.closest(".camera-control");
     const mountControl = event.target.closest(".mount-control");
-    const target = rotationHandle || cameraControl || mountControl;
+    const cabinetControl = event.target.closest(".cabinet-control");
+    const cableHit = event.target.closest(".cable-hit");
+    const target = rotationHandle || cameraControl || mountControl || cabinetControl || cableHit;
     if (!target) return;
     event.preventDefault();
     event.stopPropagation();
+
+    if (state.activeTool === "cable") {
+      if (cameraControl) handleCableNode("camera", cameraControl.dataset.cameraId);
+      else if (mountControl) handleCableNode("mount", mountControl.dataset.mountId);
+      else if (cabinetControl) handleCableNode("cabinet", cabinetControl.dataset.cabinetId);
+      return;
+    }
+
     setActiveTool(null);
+
+    if (cableHit) {
+      selectCable(cableHit.dataset.cableId);
+      return;
+    }
+
+    if (cabinetControl) {
+      const cabinet = getCabinet(cabinetControl.dataset.cabinetId);
+      if (!cabinet) return;
+      selectCabinet(cabinet.id);
+      state.objectInteraction = {
+        type: "moveCabinet",
+        cabinetId: cabinet.id,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        startX: cabinet.x,
+        startY: cabinet.y,
+      };
+      return;
+    }
 
     if (mountControl) {
       const mount = getMount(mountControl.dataset.mountId);
@@ -801,6 +1261,11 @@
           camera.y = start.y + delta.y;
         }
       });
+    } else if (interaction.type === "moveCabinet") {
+      const cabinet = getCabinet(interaction.cabinetId);
+      if (!cabinet) return;
+      cabinet.x = clamp(interaction.startX + (event.clientX - interaction.startClientX) / state.view.scale, 0, state.imageWidth);
+      cabinet.y = clamp(interaction.startY + (event.clientY - interaction.startClientY) / state.view.scale, 0, state.imageHeight);
     } else {
       const camera = getCamera(interaction.cameraId);
       if (!camera) return;
@@ -844,15 +1309,18 @@
     state.view = AppMath.zoomAt(state.view, cursorX, cursorY, nextScale);
     state.fitted = false;
     renderView();
+    renderObjects();
   }, { passive: false });
 
   elements.workspace.addEventListener("pointerdown", (event) => {
     if (!state.imageWidth || event.button !== 0) return;
     if (state.activeTool) {
       event.preventDefault();
+      if (state.activeTool === "cable") return;
       const point = workspacePoint(event.clientX, event.clientY);
       if (!isInsideMap(point)) return;
       if (state.activeTool === "camera") addCamera(point, state.cameraMountId);
+      else if (state.activeTool === "cabinet") addCabinet(point);
       else addMount(point, state.activeTool);
       return;
     }
@@ -888,6 +1356,8 @@
     if (event.key === "Delete" && !event.target.matches("input")) {
       if (state.selectedCameraId) elements.deleteCamera.click();
       else if (state.selectedMountId) elements.deleteMount.click();
+      else if (state.selectedCabinetId) elements.deleteCabinet.click();
+      else if (state.selectedCableId) elements.deleteCable.click();
     }
   });
 
