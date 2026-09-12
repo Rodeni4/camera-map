@@ -1,0 +1,207 @@
+:root {
+  color-scheme: light;
+  font-family: "Segoe UI", Arial, sans-serif;
+  color: #172033;
+  background: #eef1f5;
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body { min-width: 360px; }
+button, input { font: inherit; }
+
+.app {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  height: 100%;
+  padding: 16px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 48px;
+  padding: 7px 10px 7px 14px;
+  border: 1px solid #d6dbe4;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 2px 8px rgb(28 39 58 / 6%);
+}
+
+.document-status {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+  color: #5e697a;
+  font-size: 13px;
+}
+
+.document-status #status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolbar__actions { display: flex; gap: 8px; }
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 8px 14px;
+  border: 1px solid #c5ccd8;
+  border-radius: 8px;
+  color: #263247;
+  background: #fff;
+  cursor: pointer;
+  user-select: none;
+}
+
+.button:hover:not(:disabled) {
+  border-color: #8e99ab;
+  background: #f7f8fa;
+}
+
+.button:focus-visible, .workspace:focus-visible {
+  outline: 3px solid rgb(47 104 255 / 28%);
+  outline-offset: 2px;
+}
+
+.button--primary {
+  border-color: #2f68ff;
+  color: #fff;
+  background: #2f68ff;
+}
+
+.button.button--primary:hover {
+  border-color: #2457d9;
+  background: #2457d9;
+}
+
+.button:disabled {
+  color: #9aa2b1;
+  background: #f2f4f7;
+  cursor: default;
+}
+
+.workspace-panel {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #cfd5df;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 4px 18px rgb(28 39 58 / 8%);
+}
+
+.workspace {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+  background-color: #dfe4eb;
+  background-image:
+    linear-gradient(45deg, #d7dce4 25%, transparent 25%),
+    linear-gradient(-45deg, #d7dce4 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #d7dce4 75%),
+    linear-gradient(-45deg, transparent 75%, #d7dce4 75%);
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-size: 16px 16px;
+  touch-action: none;
+  cursor: default;
+}
+
+.workspace.has-map { cursor: grab; }
+.workspace.is-dragging { cursor: grabbing; }
+
+.empty-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.empty-state__icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 12px;
+  border-radius: 14px;
+  color: #56647a;
+  background: rgb(255 255 255 / 75%);
+  font-size: 28px;
+}
+
+.empty-state__title { margin: 0 0 6px; font-weight: 600; }
+.empty-state__hint { margin: 0; color: #667085; font-size: 14px; }
+
+.scene {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.map-layer, .objects-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.map-layer {
+  display: block;
+  user-select: none;
+}
+
+.message {
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.message--error {
+  border: 1px solid #f1b9b5;
+  color: #8f2520;
+  background: #fff1f0;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 640px) {
+  .app { padding: 8px; gap: 8px; }
+  .toolbar { align-items: stretch; flex-direction: column; gap: 10px; }
+  .toolbar__actions .button { flex: 1; }
+  .document-status { order: 2; }
+}
