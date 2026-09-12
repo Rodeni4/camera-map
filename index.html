@@ -108,12 +108,23 @@
                 </div>
               </div>
             </div>
+            <div class="field">
+              <label for="camera-range">Длина обзора</label>
+              <div class="angle-inputs">
+                <input id="camera-range" type="range" min="5" max="250" value="20">
+                <div class="number-with-unit">
+                  <input id="camera-range-number" type="number" min="5" max="250" value="20">
+                  <span>%</span>
+                </div>
+              </div>
+              <small class="field__note">От короткой стороны карты</small>
+            </div>
             <div id="camera-mount-row" class="mount-link" hidden>
               <span>Крепление</span>
               <strong id="camera-mount-name"></strong>
               <button id="detach-camera" type="button">Отвязать</button>
             </div>
-            <p class="properties__hint">Перетащите камеру для перемещения. Круглый маркер меняет направление.</p>
+            <p class="properties__hint">Перетащите камеру для перемещения. Синий маркер меняет длину обзора, оранжевый — направление.</p>
             <button id="close-properties" class="button button--primary properties__done" type="button">ОК</button>
           </section>
 

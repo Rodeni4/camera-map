@@ -39,6 +39,13 @@
       return `M 0 0 L ${startX} ${startY} A ${radius} ${radius} 0 0 1 ${endX} ${endY} Z`;
     },
 
+    rangeFromPoint(origin, point, direction, min, max) {
+      const radians = direction * Math.PI / 180;
+      const projected = (point.x - origin.x) * Math.cos(radians) +
+        (point.y - origin.y) * Math.sin(radians);
+      return Math.min(max, Math.max(min, projected));
+    },
+
     clampGroupDelta(points, dx, dy, width, height) {
       const minDx = Math.max(...points.map((point) => -point.x));
       const maxDx = Math.min(...points.map((point) => width - point.x));
@@ -85,6 +92,8 @@
     macInput: document.querySelector("#camera-mac"),
     fovInput: document.querySelector("#camera-fov"),
     fovNumber: document.querySelector("#camera-fov-number"),
+    rangeInput: document.querySelector("#camera-range"),
+    rangeNumber: document.querySelector("#camera-range-number"),
     cameraMountRow: document.querySelector("#camera-mount-row"),
     cameraMountName: document.querySelector("#camera-mount-name"),
     detachCamera: document.querySelector("#detach-camera"),
@@ -149,6 +158,9 @@
   };
 
   const SVG_NS = "http://www.w3.org/2000/svg";
+  const MIN_CAMERA_RANGE_PERCENT = 5;
+  const DEFAULT_CAMERA_RANGE_PERCENT = 20;
+  const ROTATION_HANDLE_GAP = 32;
 
   function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
@@ -168,6 +180,36 @@
 
   function getCable(id) {
     return state.cables.find((cable) => cable.id === id) || null;
+  }
+
+  function cameraRangeLimits() {
+    const base = Math.max(1, Math.min(state.imageWidth, state.imageHeight));
+    const max = Math.max(base * MIN_CAMERA_RANGE_PERCENT / 100, Math.hypot(state.imageWidth, state.imageHeight));
+    return {
+      base,
+      min: base * MIN_CAMERA_RANGE_PERCENT / 100,
+      max,
+      maxPercent: Math.max(MIN_CAMERA_RANGE_PERCENT, Math.ceil(max / base * 100)),
+    };
+  }
+
+  function normalizeCameraRange(camera) {
+    const limits = cameraRangeLimits();
+    const fallback = limits.base * DEFAULT_CAMERA_RANGE_PERCENT / 100;
+    camera.range = clamp(Number(camera.range) || fallback, limits.min, limits.max);
+    return camera.range;
+  }
+
+  function cameraRangePercent(camera) {
+    return normalizeCameraRange(camera) / cameraRangeLimits().base * 100;
+  }
+
+  function rangeResizeCursor(direction) {
+    const angle = ((direction % 180) + 180) % 180;
+    if (angle < 22.5 || angle >= 157.5) return "ew-resize";
+    if (angle < 67.5) return "nwse-resize";
+    if (angle < 112.5) return "ns-resize";
+    return "nesw-resize";
   }
 
   function mountTypeName(type) {
@@ -325,12 +367,20 @@
     object.style.left = `${camera.x}px`;
     object.style.top = `${camera.y}px`;
 
-    const sector = makeSvg("svg", { viewBox: "-200 -200 400 400" });
+    const range = normalizeCameraRange(camera);
+    const sectorExtent = Math.max(200, Math.ceil(range + 4));
+    const sector = makeSvg("svg", {
+      viewBox: `${-sectorExtent} ${-sectorExtent} ${sectorExtent * 2} ${sectorExtent * 2}`,
+    });
     sector.classList.add("camera-sector");
+    sector.style.top = `${-sectorExtent}px`;
+    sector.style.left = `${-sectorExtent}px`;
+    sector.style.width = `${sectorExtent * 2}px`;
+    sector.style.height = `${sectorExtent * 2}px`;
     sector.style.transform = `rotate(${camera.direction}deg)`;
     sector.append(makeSvg("path", {
       class: "camera-sector__fill",
-      d: AppMath.sectorPath(camera.fov, 180 * state.elementScale),
+      d: AppMath.sectorPath(camera.fov, range),
     }));
     object.append(sector);
 
@@ -358,19 +408,46 @@
 
     if (camera.id === state.selectedCameraId) {
       const radians = camera.direction * Math.PI / 180;
+      const rangeUiDistance = range / state.elementScale;
+      const rotationGap = ROTATION_HANDLE_GAP / (state.view.scale * state.elementScale);
+      const rotationUiDistance = rangeUiDistance + rotationGap;
       const line = document.createElement("div");
       line.className = "rotation-line";
+      line.style.width = `${rotationUiDistance}px`;
       line.style.transform = `rotate(${camera.direction}deg)`;
       ui.append(line);
 
-      const handle = document.createElement("button");
-      handle.type = "button";
-      handle.className = "rotation-handle";
-      handle.dataset.cameraId = camera.id;
-      handle.setAttribute("aria-label", "Повернуть камеру");
-      handle.style.left = `${Math.cos(radians) * 70}px`;
-      handle.style.top = `${Math.sin(radians) * 70}px`;
-      ui.append(handle);
+      const rangeHandle = document.createElement("button");
+      rangeHandle.type = "button";
+      rangeHandle.className = "range-handle";
+      rangeHandle.dataset.cameraId = camera.id;
+      rangeHandle.setAttribute("aria-label", "Изменить длину обзора");
+      rangeHandle.title = "Изменить длину обзора";
+      rangeHandle.style.left = `${Math.cos(radians) * rangeUiDistance}px`;
+      rangeHandle.style.top = `${Math.sin(radians) * rangeUiDistance}px`;
+      rangeHandle.style.cursor = rangeResizeCursor(camera.direction);
+      rangeHandle.style.setProperty("--handle-angle", `${camera.direction}deg`);
+      ui.append(rangeHandle);
+
+      const rangeTooltip = document.createElement("span");
+      rangeTooltip.className = "range-tooltip";
+      if (state.objectInteraction?.type === "resizeRange" && state.objectInteraction.cameraId === camera.id) {
+        rangeTooltip.classList.add("is-active");
+      }
+      rangeTooltip.style.left = rangeHandle.style.left;
+      rangeTooltip.style.top = rangeHandle.style.top;
+      rangeTooltip.textContent = `Длина: ${Math.round(cameraRangePercent(camera))}%`;
+      ui.append(rangeTooltip);
+
+      const rotationHandle = document.createElement("button");
+      rotationHandle.type = "button";
+      rotationHandle.className = "rotation-handle";
+      rotationHandle.dataset.cameraId = camera.id;
+      rotationHandle.setAttribute("aria-label", "Повернуть камеру");
+      rotationHandle.title = "Повернуть камеру";
+      rotationHandle.style.left = `${Math.cos(radians) * rotationUiDistance}px`;
+      rotationHandle.style.top = `${Math.sin(radians) * rotationUiDistance}px`;
+      ui.append(rotationHandle);
     }
 
     object.append(ui);
@@ -613,6 +690,7 @@
       elements.macInput.value = camera.mac;
       elements.fovInput.value = camera.fov;
       elements.fovNumber.value = camera.fov;
+      syncCameraRangeInputs(camera);
       const cameraMount = getMount(camera.mountId);
       elements.cameraMountRow.hidden = !cameraMount;
       elements.cameraMountName.textContent = cameraMount?.name || "";
@@ -783,12 +861,14 @@
 
   function addCamera(point, mountId = null) {
     const number = state.nextCameraId++;
+    const rangeBase = Math.max(1, Math.min(state.imageWidth, state.imageHeight));
     const camera = {
       id: `c${number}`,
       x: point.x,
       y: point.y,
       direction: 0,
       fov: 90,
+      range: rangeBase * DEFAULT_CAMERA_RANGE_PERCENT / 100,
       name: `Камера ${number}`,
       model: "HiWatch T020",
       ip: `192.168.1.${19 + number}`,
@@ -981,6 +1061,7 @@
         object.x = clamp(object.x, 0, state.imageWidth);
         object.y = clamp(object.y, 0, state.imageHeight);
       });
+      state.cameras.forEach(normalizeCameraRange);
 
       elements.scene.style.width = `${state.imageWidth}px`;
       elements.scene.style.height = `${state.imageHeight}px`;
@@ -1074,6 +1155,33 @@
   });
   elements.fovNumber.addEventListener("change", (event) => setFov(event.target.value));
 
+  function syncCameraRangeInputs(camera) {
+    const limits = cameraRangeLimits();
+    const percent = Math.round(cameraRangePercent(camera));
+    elements.rangeInput.min = MIN_CAMERA_RANGE_PERCENT;
+    elements.rangeNumber.min = MIN_CAMERA_RANGE_PERCENT;
+    elements.rangeInput.max = limits.maxPercent;
+    elements.rangeNumber.max = limits.maxPercent;
+    elements.rangeInput.value = percent;
+    elements.rangeNumber.value = percent;
+  }
+
+  function setCameraRangePercent(rawValue) {
+    const camera = getCamera(state.selectedCameraId);
+    if (!camera) return;
+    const limits = cameraRangeLimits();
+    const percent = clamp(Number(rawValue) || MIN_CAMERA_RANGE_PERCENT, MIN_CAMERA_RANGE_PERCENT, limits.maxPercent);
+    camera.range = clamp(limits.base * percent / 100, limits.min, limits.max);
+    syncCameraRangeInputs(camera);
+    renderObjects();
+  }
+
+  elements.rangeInput.addEventListener("input", (event) => setCameraRangePercent(event.target.value));
+  elements.rangeNumber.addEventListener("input", (event) => {
+    if (event.target.value !== "") setCameraRangePercent(event.target.value);
+  });
+  elements.rangeNumber.addEventListener("change", (event) => setCameraRangePercent(event.target.value));
+
   elements.detachCamera.addEventListener("click", () => {
     const camera = getCamera(state.selectedCameraId);
     if (!camera) return;
@@ -1165,11 +1273,12 @@
   elements.objectsLayer.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
     const rotationHandle = event.target.closest(".rotation-handle");
+    const rangeHandle = event.target.closest(".range-handle");
     const cameraControl = event.target.closest(".camera-control");
     const mountControl = event.target.closest(".mount-control");
     const cabinetControl = event.target.closest(".cabinet-control");
     const cableHit = event.target.closest(".cable-hit");
-    const target = rotationHandle || cameraControl || mountControl || cabinetControl || cableHit;
+    const target = rotationHandle || rangeHandle || cameraControl || mountControl || cabinetControl || cableHit;
     if (!target) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1222,12 +1331,14 @@
       return;
     }
 
-    const camera = getCamera((rotationHandle || cameraControl).dataset.cameraId);
+    const camera = getCamera((rotationHandle || rangeHandle || cameraControl).dataset.cameraId);
     if (!camera) return;
     selectCamera(camera.id);
     state.objectInteraction = rotationHandle
       ? { type: "rotate", cameraId: camera.id }
-      : {
+      : rangeHandle
+        ? { type: "resizeRange", cameraId: camera.id }
+        : {
           type: "moveCamera",
           cameraId: camera.id,
           startClientX: event.clientX,
@@ -1273,6 +1384,11 @@
         camera.x = clamp(interaction.startX + (event.clientX - interaction.startClientX) / state.view.scale, 0, state.imageWidth);
         camera.y = clamp(interaction.startY + (event.clientY - interaction.startClientY) / state.view.scale, 0, state.imageHeight);
         state.snapTargetId = nearestMount(camera.x, camera.y)?.id || null;
+      } else if (interaction.type === "resizeRange") {
+        const point = workspacePoint(event.clientX, event.clientY);
+        const limits = cameraRangeLimits();
+        camera.range = AppMath.rangeFromPoint(camera, point, camera.direction, limits.min, limits.max);
+        syncCameraRangeInputs(camera);
       } else {
         const point = workspacePoint(event.clientX, event.clientY);
         camera.direction = (Math.atan2(point.y - camera.y, point.x - camera.x) * 180 / Math.PI + 360) % 360;

@@ -34,6 +34,22 @@ const wideSector = ViewMath.sectorPath(120, 180);
 assert.notEqual(narrowSector, wideSector);
 assert.match(narrowSector, /^M 0 0 L /);
 
+assert.equal(
+  ViewMath.rangeFromPoint({ x: 100, y: 100 }, { x: 260, y: 140 }, 0, 50, 500),
+  160,
+);
+assert.ok(Math.abs(
+  ViewMath.rangeFromPoint({ x: 100, y: 100 }, { x: 140, y: 300 }, 90, 50, 500) - 200,
+) < 1e-9);
+assert.equal(
+  ViewMath.rangeFromPoint({ x: 100, y: 100 }, { x: 80, y: 100 }, 0, 50, 500),
+  50,
+);
+assert.equal(
+  ViewMath.rangeFromPoint({ x: 100, y: 100 }, { x: 900, y: 100 }, 0, 50, 500),
+  500,
+);
+
 assert.deepEqual(
   ViewMath.clampGroupDelta([{ x: 50, y: 40 }, { x: 80, y: 90 }], -100, 200, 300, 200),
   { x: -50, y: 110 },
@@ -63,6 +79,8 @@ const requiredIds = [
   "camera-mac",
   "camera-fov",
   "camera-fov-number",
+  "camera-range",
+  "camera-range-number",
   "close-properties",
   "mount-properties",
   "mount-name",
