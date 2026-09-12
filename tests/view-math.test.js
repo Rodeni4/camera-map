@@ -1,6 +1,8 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const ViewMath = require("../app.js");
 
 const landscape = ViewMath.fit(1000, 700, 1600, 900, 24);
@@ -22,4 +24,31 @@ const pointAfter = {
 };
 assert.deepEqual(pointAfter, pointBefore);
 
-console.log("Проверки геометрии пройдены: вписывание и масштабирование относительно курсора.");
+assert.deepEqual(
+  ViewMath.toScene({ x: 100, y: 50, scale: 2 }, 500, 250),
+  { x: 200, y: 100 },
+);
+
+const narrowSector = ViewMath.sectorPath(30, 180);
+const wideSector = ViewMath.sectorPath(120, 180);
+assert.notEqual(narrowSector, wideSector);
+assert.match(narrowSector, /^M 0 0 L /);
+
+const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+const requiredIds = [
+  "camera-tool",
+  "camera-properties",
+  "camera-list",
+  "camera-name",
+  "camera-model",
+  "camera-ip",
+  "camera-mac",
+  "camera-fov",
+  "camera-fov-number",
+  "close-properties",
+  "objects-layer",
+];
+requiredIds.forEach((id) => assert.match(html, new RegExp(`id="${id}"`)));
+assert.doesNotMatch(html, /https?:\/\//);
+
+console.log("Проверки геометрии пройдены: карта, координаты и сектор обзора.");
