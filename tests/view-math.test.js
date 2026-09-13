@@ -51,6 +51,15 @@ assert.equal(
 );
 
 assert.deepEqual(
+  ViewMath.closestPointOnRect({ x: 10, y: 60 }, { x: 40, y: 30, width: 100, height: 80 }),
+  { x: 40, y: 60 },
+);
+assert.deepEqual(
+  ViewMath.closestPointOnRect({ x: 70, y: 60 }, { x: 40, y: 30, width: 100, height: 80 }),
+  { x: 40, y: 60 },
+);
+
+assert.deepEqual(
   ViewMath.clampGroupDelta([{ x: 50, y: 40 }, { x: 80, y: 90 }], -100, 200, 300, 200),
   { x: -50, y: 110 },
 );
@@ -94,6 +103,7 @@ const requiredIds = [
   "free-camera-list",
   "cabinet-properties",
   "cabinet-name",
+  "open-cabinet-card",
   "cable-properties",
   "cable-name",
   "cable-type",

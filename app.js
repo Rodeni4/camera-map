@@ -46,6 +46,27 @@
       return Math.min(max, Math.max(min, projected));
     },
 
+    closestPointOnRect(point, rect) {
+      const right = rect.x + rect.width;
+      const bottom = rect.y + rect.height;
+      const insideX = point.x >= rect.x && point.x <= right;
+      const insideY = point.y >= rect.y && point.y <= bottom;
+      if (!insideX || !insideY) {
+        return {
+          x: Math.min(right, Math.max(rect.x, point.x)),
+          y: Math.min(bottom, Math.max(rect.y, point.y)),
+        };
+      }
+      const edges = [
+        { distance: point.x - rect.x, x: rect.x, y: point.y },
+        { distance: right - point.x, x: right, y: point.y },
+        { distance: point.y - rect.y, x: point.x, y: rect.y },
+        { distance: bottom - point.y, x: point.x, y: bottom },
+      ];
+      edges.sort((a, b) => a.distance - b.distance);
+      return { x: edges[0].x, y: edges[0].y };
+    },
+
     clampGroupDelta(points, dx, dy, width, height) {
       const minDx = Math.max(...points.map((point) => -point.x));
       const maxDx = Math.min(...points.map((point) => width - point.x));
@@ -115,6 +136,7 @@
     closeMountProperties: document.querySelector("#close-mount-properties"),
     cabinetProperties: document.querySelector("#cabinet-properties"),
     cabinetNameInput: document.querySelector("#cabinet-name"),
+    openCabinetCard: document.querySelector("#open-cabinet-card"),
     deleteCabinet: document.querySelector("#delete-cabinet"),
     closeCabinetProperties: document.querySelector("#close-cabinet-properties"),
     cableProperties: document.querySelector("#cable-properties"),
@@ -160,12 +182,16 @@
     snapTargetId: null,
     cableDraft: null,
     pendingCableSourceId: null,
+    lastCabinetPointerDown: null,
   };
 
   const SVG_NS = "http://www.w3.org/2000/svg";
   const MIN_CAMERA_RANGE_PERCENT = 5;
   const DEFAULT_CAMERA_RANGE_PERCENT = 20;
   const ROTATION_HANDLE_GAP = 32;
+  const CABINET_CARD_WIDTH = 340;
+  const CABINET_CARD_HEADER_HEIGHT = 44;
+  const CABINET_CARD_HEIGHT = 126;
 
   function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
@@ -181,6 +207,33 @@
 
   function getCabinet(id) {
     return state.cabinets.find((cabinet) => cabinet.id === id) || null;
+  }
+
+  function getCabinetCard(cabinet) {
+    if (!cabinet.card) {
+      cabinet.card = { open: false, collapsed: false, x: null, y: null };
+    }
+    return cabinet.card;
+  }
+
+  function openCabinetCard(cabinet) {
+    const card = getCabinetCard(cabinet);
+    if (!Number.isFinite(card.x) || !Number.isFinite(card.y)) {
+      const rect = elements.workspace.getBoundingClientRect();
+      const openCount = state.cabinets.filter((item) => getCabinetCard(item).open).length;
+      const cabinetScreenX = state.view.x + cabinet.x * state.view.scale;
+      const cabinetScreenY = state.view.y + cabinet.y * state.view.scale;
+      const cascade = openCount * 22;
+      const maxLeft = Math.max(12, rect.width - CABINET_CARD_WIDTH - 12);
+      const desiredLeft = clamp(cabinetScreenX + 42 + cascade, 12, maxLeft);
+      const desiredTop = clamp(cabinetScreenY - 30 + cascade, 12, Math.max(12, rect.height - CABINET_CARD_HEIGHT - 12));
+      const scenePoint = AppMath.toScene(state.view, desiredLeft, desiredTop);
+      card.x = scenePoint.x;
+      card.y = scenePoint.y;
+    }
+    card.open = true;
+    card.collapsed = false;
+    selectCabinet(cabinet.id);
   }
 
   function getCable(id) {
@@ -483,6 +536,108 @@
     elements.objectsLayer.append(object);
   }
 
+  function appendCabinetCardLink(cabinet) {
+    const card = getCabinetCard(cabinet);
+    if (!card.open) return;
+    const cardHeight = (card.collapsed ? CABINET_CARD_HEADER_HEIGHT : CABINET_CARD_HEIGHT) / state.view.scale;
+    const cardBounds = {
+      x: card.x,
+      y: card.y,
+      width: CABINET_CARD_WIDTH / state.view.scale,
+      height: cardHeight,
+    };
+    const end = AppMath.closestPointOnRect(cabinet, cardBounds);
+    const dx = end.x - cabinet.x;
+    const dy = end.y - cabinet.y;
+    const distance = Math.hypot(dx, dy);
+    if (!distance) return;
+    const line = document.createElement("div");
+    line.className = "cabinet-card-link";
+    if (cabinet.id === state.selectedCabinetId) line.classList.add("is-selected");
+    line.style.left = `${cabinet.x}px`;
+    line.style.top = `${cabinet.y}px`;
+    line.style.width = `${distance}px`;
+    line.style.borderTopWidth = `${1 / state.view.scale}px`;
+    line.style.transform = `rotate(${Math.atan2(dy, dx) * 180 / Math.PI}deg)`;
+    elements.objectsLayer.append(line);
+  }
+
+  function appendCabinetCard(cabinet) {
+    const cardState = getCabinetCard(cabinet);
+    if (!cardState.open) return;
+
+    const card = document.createElement("section");
+    card.className = "cabinet-card";
+    if (cardState.collapsed) card.classList.add("is-collapsed");
+    if (cabinet.id === state.selectedCabinetId) card.classList.add("is-selected");
+    card.dataset.cabinetCardId = cabinet.id;
+    card.style.left = `${cardState.x}px`;
+    card.style.top = `${cardState.y}px`;
+
+    const header = document.createElement("header");
+    header.className = "cabinet-card__header";
+    header.dataset.cabinetCardId = cabinet.id;
+
+    const dragMark = document.createElement("span");
+    dragMark.className = "cabinet-card__drag-mark";
+    dragMark.textContent = "⠿";
+    dragMark.setAttribute("aria-hidden", "true");
+
+    const title = document.createElement("div");
+    title.className = "cabinet-card__title";
+    const name = document.createElement("strong");
+    name.textContent = cabinet.name || "Шкаф без названия";
+    const count = document.createElement("span");
+    count.textContent = `${cabinet.equipment?.length || 0} устройств`;
+    title.append(name, count);
+
+    const actions = document.createElement("div");
+    actions.className = "cabinet-card__actions";
+
+    const locate = document.createElement("button");
+    locate.type = "button";
+    locate.textContent = "⌖";
+    locate.title = "Показать шкаф на карте";
+    locate.setAttribute("aria-label", "Показать шкаф на карте");
+    locate.addEventListener("click", () => {
+      selectCabinet(cabinet.id);
+      ensurePointVisible(cabinet);
+    });
+
+    const collapse = document.createElement("button");
+    collapse.type = "button";
+    collapse.textContent = cardState.collapsed ? "+" : "−";
+    collapse.title = cardState.collapsed ? "Развернуть карточку" : "Свернуть карточку";
+    collapse.setAttribute("aria-label", collapse.title);
+    collapse.addEventListener("click", () => {
+      cardState.collapsed = !cardState.collapsed;
+      renderObjects();
+    });
+
+    const close = document.createElement("button");
+    close.type = "button";
+    close.textContent = "×";
+    close.title = "Закрыть карточку";
+    close.setAttribute("aria-label", "Закрыть карточку");
+    close.addEventListener("click", () => {
+      cardState.open = false;
+      renderObjects();
+    });
+
+    actions.append(locate, collapse, close);
+    header.append(dragMark, title, actions);
+
+    const body = document.createElement("div");
+    body.className = "cabinet-card__body";
+    body.hidden = cardState.collapsed;
+    const empty = document.createElement("p");
+    empty.className = "cabinet-card__empty";
+    empty.textContent = "Оборудование пока не добавлено";
+    body.append(empty);
+    card.append(header, body);
+    elements.objectsLayer.append(card);
+  }
+
   function appendCabinet(cabinet) {
     const object = document.createElement("div");
     object.className = "cabinet-object";
@@ -495,6 +650,7 @@
     control.className = "cabinet-control";
     control.dataset.cabinetId = cabinet.id;
     control.setAttribute("aria-label", cabinet.name);
+    control.title = "Двойной щелчок — открыть карточку";
     const tooltip = document.createElement("div");
     tooltip.className = "cabinet-tooltip";
     tooltip.textContent = cabinet.name;
@@ -513,7 +669,9 @@
     });
     state.cameras.forEach(appendCamera);
     state.mounts.forEach(appendMount);
+    state.cabinets.forEach(appendCabinetCardLink);
     state.cabinets.forEach(appendCabinet);
+    state.cabinets.forEach(appendCabinetCard);
   }
 
   function makeListCamera(camera, index) {
@@ -921,6 +1079,8 @@
       name: `Шкаф ${number}`,
       x: point.x,
       y: point.y,
+      equipment: [],
+      card: { open: false, collapsed: false, x: null, y: null },
     };
     state.cabinets.push(cabinet);
     setActiveTool(null);
@@ -1290,6 +1450,10 @@
     renderObjects();
     renderObjectList();
   });
+  elements.openCabinetCard.addEventListener("click", () => {
+    const cabinet = getCabinet(state.selectedCabinetId);
+    if (cabinet) openCabinetCard(cabinet);
+  });
   elements.deleteCabinet.addEventListener("click", () => {
     const cabinetId = state.selectedCabinetId;
     state.cabinets = state.cabinets.filter((cabinet) => cabinet.id !== cabinetId);
@@ -1315,6 +1479,27 @@
 
   elements.objectsLayer.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
+    const cabinetCard = event.target.closest(".cabinet-card");
+    if (cabinetCard) {
+      event.preventDefault();
+      event.stopPropagation();
+      const header = event.target.closest(".cabinet-card__header");
+      if (!header || event.target.closest("button")) return;
+      const cabinet = getCabinet(cabinetCard.dataset.cabinetCardId);
+      const card = cabinet && getCabinetCard(cabinet);
+      if (!cabinet || !card) return;
+      const interaction = {
+        type: "moveCabinetCard",
+        cabinetId: cabinet.id,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        startX: card.x,
+        startY: card.y,
+      };
+      selectCabinet(cabinet.id);
+      state.objectInteraction = interaction;
+      return;
+    }
     const rotationHandle = event.target.closest(".rotation-handle");
     const rangeHandle = event.target.closest(".range-handle");
     const cameraControl = event.target.closest(".camera-control");
@@ -1343,6 +1528,20 @@
     if (cabinetControl) {
       const cabinet = getCabinet(cabinetControl.dataset.cabinetId);
       if (!cabinet) return;
+      const now = performance.now();
+      const previous = state.lastCabinetPointerDown;
+      const isDoubleClick = previous && previous.cabinetId === cabinet.id && now - previous.time < 450 &&
+        Math.hypot(event.clientX - previous.clientX, event.clientY - previous.clientY) < 8;
+      state.lastCabinetPointerDown = isDoubleClick ? null : {
+        cabinetId: cabinet.id,
+        time: now,
+        clientX: event.clientX,
+        clientY: event.clientY,
+      };
+      if (isDoubleClick) {
+        openCabinetCard(cabinet);
+        return;
+      }
       selectCabinet(cabinet.id);
       state.objectInteraction = {
         type: "moveCabinet",
@@ -1391,11 +1590,32 @@
         };
   });
 
+  elements.objectsLayer.addEventListener("dblclick", (event) => {
+    const control = event.target.closest(".cabinet-control");
+    if (!control || state.activeTool === "cable") return;
+    const cabinet = getCabinet(control.dataset.cabinetId);
+    if (!cabinet) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveTool(null);
+    openCabinetCard(cabinet);
+  });
+
+  elements.objectsLayer.addEventListener("wheel", (event) => {
+    if (event.target.closest(".cabinet-card")) event.stopPropagation();
+  }, { passive: true });
+
   window.addEventListener("pointermove", (event) => {
     const interaction = state.objectInteraction;
     if (!interaction) return;
 
-    if (interaction.type === "moveMount") {
+    if (interaction.type === "moveCabinetCard") {
+      const cabinet = getCabinet(interaction.cabinetId);
+      const card = cabinet && getCabinetCard(cabinet);
+      if (!card) return;
+      card.x = interaction.startX + (event.clientX - interaction.startClientX) / state.view.scale;
+      card.y = interaction.startY + (event.clientY - interaction.startClientY) / state.view.scale;
+    } else if (interaction.type === "moveMount") {
       const mount = getMount(interaction.mountId);
       if (!mount) return;
       const points = [{ x: interaction.startX, y: interaction.startY }, ...interaction.attached];
@@ -1418,6 +1638,9 @@
     } else if (interaction.type === "moveCabinet") {
       const cabinet = getCabinet(interaction.cabinetId);
       if (!cabinet) return;
+      if (Math.hypot(event.clientX - interaction.startClientX, event.clientY - interaction.startClientY) > 4) {
+        state.lastCabinetPointerDown = null;
+      }
       cabinet.x = clamp(interaction.startX + (event.clientX - interaction.startClientX) / state.view.scale, 0, state.imageWidth);
       cabinet.y = clamp(interaction.startY + (event.clientY - interaction.startClientY) / state.view.scale, 0, state.imageHeight);
     } else {
