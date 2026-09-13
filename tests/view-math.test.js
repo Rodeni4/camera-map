@@ -73,6 +73,10 @@ assert.equal((lanesAtDoubleZoom[1] - lanesAtDoubleZoom[0]) * 2, 5);
 
 const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
 const requiredIds = [
+  "project-status",
+  "new-project",
+  "project-file",
+  "save-project",
   "camera-tool",
   "element-scale",
   "element-scale-value",

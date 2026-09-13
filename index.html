@@ -10,7 +10,10 @@
     <main class="app">
       <header class="toolbar">
         <div class="document-status">
-          <span id="status" role="status" aria-live="polite">Карта не загружена</span>
+          <div class="document-summary">
+            <strong id="project-status" class="project-status">Новый проект</strong>
+            <span id="status" role="status" aria-live="polite">Карта не загружена</span>
+          </div>
           <span class="document-status__separator" aria-hidden="true">·</span>
           <span id="zoom-status">Масштаб: —</span>
         </div>
@@ -20,10 +23,30 @@
           <output id="element-scale-value" for="element-scale">100%</output>
         </label>
         <div class="toolbar__actions">
-          <label class="button button--primary" for="map-file">Загрузить карту</label>
+          <button id="new-project" class="button toolbar-icon-button" type="button"
+            title="Новый проект" aria-label="Новый проект" data-tooltip="Новый проект">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2.75h8.2L19.25 7.8V21.25H6a1.25 1.25 0 0 1-1.25-1.25V4A1.25 1.25 0 0 1 6 2.75Zm7.25 1.5V8.75h4.5M12 11v6m-3-3h6"/></svg>
+          </button>
+          <label class="button toolbar-icon-button" for="project-file"
+            title="Открыть проект" aria-label="Открыть проект" data-tooltip="Открыть проект">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.75 19.25 6.4 9.75h13.85l-2.65 9.5H3.75Zm1-9.5V5.5h5l1.6 2h7.9v2.25"/></svg>
+          </label>
+          <input id="project-file" class="visually-hidden" type="file"
+            accept=".cmap,.json,application/json">
+          <button id="save-project" class="button toolbar-icon-button" type="button" disabled
+            title="Сохранить проект" aria-label="Сохранить проект" data-tooltip="Сохранить проект">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.25 3.75h13.5l2 2v14.5H4.25V3.75Zm3 0v6h9v-6M7.5 20.25v-7h9v7"/></svg>
+          </button>
+          <label class="button button--primary toolbar-icon-button" for="map-file"
+            title="Загрузить карту" aria-label="Загрузить карту" data-tooltip="Загрузить карту">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.25 4.25h15.5v15.5H4.25V4.25Zm0 11.5 4-4 3 3 2-2 6.5 6.5M15.75 7.75v4m-2-2h4"/></svg>
+          </label>
           <input id="map-file" class="visually-hidden" type="file"
             accept=".png,.jpg,.jpeg,image/png,image/jpeg">
-          <button id="fit-button" class="button" type="button" disabled>Показать целиком</button>
+          <button id="fit-button" class="button toolbar-icon-button" type="button" disabled
+            title="Показать карту целиком" aria-label="Показать карту целиком" data-tooltip="Показать целиком">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4.25H4.25V9M15 4.25h4.75V9M9 19.75H4.25V15M15 19.75h4.75V15M8 8h8v8H8V8Z"/></svg>
+          </button>
         </div>
       </header>
 

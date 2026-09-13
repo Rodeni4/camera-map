@@ -88,6 +88,10 @@
 
   const elements = {
     fileInput: document.querySelector("#map-file"),
+    projectFileInput: document.querySelector("#project-file"),
+    newProjectButton: document.querySelector("#new-project"),
+    saveProjectButton: document.querySelector("#save-project"),
+    projectStatus: document.querySelector("#project-status"),
     fitButton: document.querySelector("#fit-button"),
     workspace: document.querySelector("#workspace"),
     emptyState: document.querySelector("#empty-state"),
@@ -150,6 +154,10 @@
 
   const state = {
     imageUrl: null,
+    imageData: null,
+    imageToken: 0,
+    mapFileName: null,
+    mapMimeType: null,
     imageWidth: 0,
     imageHeight: 0,
     view: { x: 0, y: 0, scale: 1 },
@@ -185,9 +193,15 @@
     pendingCableSourceId: null,
     lastCabinetPointerDown: null,
     lastCardResizePointerDown: null,
+    projectName: "Новый проект",
+    projectFileName: null,
+    cleanFingerprint: "",
+    isDirty: false,
   };
 
   const SVG_NS = "http://www.w3.org/2000/svg";
+  const PROJECT_FORMAT = "camera-map-project";
+  const PROJECT_VERSION = 1;
   const MIN_CAMERA_RANGE_PERCENT = 5;
   const DEFAULT_CAMERA_RANGE_PERCENT = 20;
   const ROTATION_HANDLE_GAP = 32;
@@ -208,6 +222,105 @@
 
   function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
+  }
+
+  function fileNameWithoutExtension(fileName) {
+    return String(fileName || "").replace(/\.[^.]+$/, "").trim();
+  }
+
+  function safeProjectFileName(name) {
+    const safeName = String(name || "Проект камер")
+      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+      .trim()
+      .replace(/[. ]+$/, "") || "Проект камер";
+    return `${safeName}.cmap`;
+  }
+
+  function serializableCard(cabinet) {
+    const card = getCabinetCard(cabinet);
+    return {
+      open: card.open,
+      collapsed: card.collapsed,
+      x: card.x,
+      y: card.y,
+      width: card.width,
+    };
+  }
+
+  function serializableCabinet(cabinet) {
+    return {
+      id: cabinet.id,
+      name: cabinet.name,
+      x: cabinet.x,
+      y: cabinet.y,
+      equipment: cabinetEquipment(cabinet).map((item) => ({
+        id: item.id,
+        type: item.type,
+        name: item.name,
+        model: item.model,
+        ip: item.ip,
+        ports: item.ports,
+        note: item.note,
+      })),
+      card: serializableCard(cabinet),
+    };
+  }
+
+  function projectContent(includeImage = true) {
+    return {
+      name: state.projectName,
+      map: {
+        fileName: state.mapFileName,
+        mimeType: state.mapMimeType,
+        width: state.imageWidth,
+        height: state.imageHeight,
+        ...(includeImage ? { dataUrl: state.imageData } : { token: state.imageToken }),
+      },
+      settings: {
+        elementScale: state.elementScale,
+      },
+      counters: {
+        nextCameraId: state.nextCameraId,
+        nextMountId: state.nextMountId,
+        nextPoleNumber: state.nextPoleNumber,
+        nextPointNumber: state.nextPointNumber,
+        nextCabinetId: state.nextCabinetId,
+        nextEquipmentId: state.nextEquipmentId,
+        nextCableId: state.nextCableId,
+        nextCopperNumber: state.nextCopperNumber,
+        nextFiberNumber: state.nextFiberNumber,
+      },
+      cameras: state.cameras.map((camera) => ({ ...camera })),
+      mounts: state.mounts.map((mount) => ({ ...mount })),
+      cabinets: state.cabinets.map(serializableCabinet),
+      cables: state.cables.map((cable) => ({ ...cable, viaMountIds: [...cable.viaMountIds] })),
+    };
+  }
+
+  function currentFingerprint() {
+    return JSON.stringify(projectContent(false));
+  }
+
+  function updateProjectStatus() {
+    const suffix = state.isDirty ? " · не сохранён" : "";
+    elements.projectStatus.textContent = `${state.projectName}${suffix}`;
+    elements.projectStatus.classList.toggle("is-dirty", state.isDirty);
+    elements.projectStatus.title = state.isDirty
+      ? `${state.projectName}: есть несохранённые изменения`
+      : state.projectName;
+    elements.saveProjectButton.disabled = !state.imageWidth;
+    document.title = `${state.isDirty ? "● " : ""}${state.projectName} — Редактор карты камер`;
+  }
+
+  function refreshDirtyState() {
+    state.isDirty = currentFingerprint() !== state.cleanFingerprint;
+    updateProjectStatus();
+  }
+
+  function markProjectClean() {
+    state.cleanFingerprint = currentFingerprint();
+    state.isDirty = false;
+    updateProjectStatus();
   }
 
   function getCamera(id) {
@@ -1475,6 +1588,368 @@
     });
   }
 
+  function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function releaseImageUrl() {
+    if (state.imageUrl?.startsWith("blob:")) URL.revokeObjectURL(state.imageUrl);
+  }
+
+  function setMapControlsEnabled(enabled) {
+    elements.fitButton.disabled = !enabled;
+    elements.cameraTool.disabled = !enabled;
+    elements.poleTool.disabled = !enabled;
+    elements.mountTool.disabled = !enabled;
+    elements.cabinetTool.disabled = !enabled;
+    elements.cableTool.disabled = !enabled;
+    elements.saveProjectButton.disabled = !enabled;
+  }
+
+  function showLoadedMap() {
+    elements.scene.style.width = `${state.imageWidth}px`;
+    elements.scene.style.height = `${state.imageHeight}px`;
+    elements.mapImage.src = state.imageUrl;
+    elements.mapImage.alt = `Карта «${state.mapFileName}»`;
+    elements.scene.hidden = false;
+    elements.emptyState.hidden = true;
+    elements.workspace.classList.add("has-map");
+    setMapControlsEnabled(true);
+    elements.status.textContent = `${state.mapFileName} · ${state.imageWidth} × ${state.imageHeight} px`;
+  }
+
+  function limitedText(value, fallback = "", maxLength = 5000) {
+    return typeof value === "string" ? value.slice(0, maxLength) : fallback;
+  }
+
+  function finiteNumber(value, fallback = 0) {
+    return Number.isFinite(Number(value)) ? Number(value) : fallback;
+  }
+
+  function validId(value, label) {
+    if (typeof value !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(value)) {
+      throw new Error(`Файл проекта повреждён: некорректный идентификатор ${label}.`);
+    }
+    return value;
+  }
+
+  function projectArray(value, label) {
+    if (!Array.isArray(value) || value.length > 10000) {
+      throw new Error(`Файл проекта повреждён: некорректный раздел «${label}».`);
+    }
+    return value;
+  }
+
+  function uniqueIds(items, label) {
+    const ids = new Set();
+    items.forEach((item) => {
+      if (ids.has(item.id)) throw new Error(`Файл проекта повреждён: повторяется идентификатор в разделе «${label}».`);
+      ids.add(item.id);
+    });
+    return ids;
+  }
+
+  function normalizedCounter(value, minimum = 1) {
+    return Math.max(minimum, Math.floor(finiteNumber(value, minimum)));
+  }
+
+  function nextNumericId(items, prefix) {
+    return items.reduce((next, item) => {
+      const match = String(item.id).match(new RegExp(`^${prefix}(\\d+)$`));
+      return match ? Math.max(next, Number(match[1]) + 1) : next;
+    }, 1);
+  }
+
+  function normalizeProject(raw) {
+    if (!raw || typeof raw !== "object" || raw.format !== PROJECT_FORMAT) {
+      throw new Error("Выбранный файл не является проектом Camera Map.");
+    }
+    if (raw.version !== PROJECT_VERSION) {
+      throw new Error(`Версия проекта ${raw.version ?? "не указана"} не поддерживается этой версией приложения.`);
+    }
+    const project = raw.project;
+    const map = project?.map;
+    if (!project || typeof project !== "object" || !map || typeof map !== "object") {
+      throw new Error("Файл проекта повреждён: отсутствуют данные карты.");
+    }
+    if (typeof map.dataUrl !== "string" || !/^data:image\/(png|jpeg);base64,/i.test(map.dataUrl)) {
+      throw new Error("Файл проекта повреждён: изображение карты отсутствует или имеет неподдерживаемый формат.");
+    }
+    const width = Math.floor(finiteNumber(map.width));
+    const height = Math.floor(finiteNumber(map.height));
+    if (width < 1 || height < 1 || width > 100000 || height > 100000) {
+      throw new Error("Файл проекта повреждён: некорректный размер карты.");
+    }
+
+    const mounts = projectArray(project.mounts, "крепления").map((item) => ({
+      id: validId(item?.id, "крепления"),
+      type: item?.type === "pole" ? "pole" : item?.type === "point" ? "point" : null,
+      name: limitedText(item?.name),
+      x: clamp(finiteNumber(item?.x), 0, width),
+      y: clamp(finiteNumber(item?.y), 0, height),
+    }));
+    if (mounts.some((mount) => !mount.type)) throw new Error("Файл проекта повреждён: неизвестный тип крепления.");
+    const mountIds = uniqueIds(mounts, "крепления");
+
+    const cameras = projectArray(project.cameras, "камеры").map((item) => ({
+      id: validId(item?.id, "камеры"),
+      x: clamp(finiteNumber(item?.x), 0, width),
+      y: clamp(finiteNumber(item?.y), 0, height),
+      direction: ((finiteNumber(item?.direction) % 360) + 360) % 360,
+      fov: clamp(finiteNumber(item?.fov, 90), 1, 180),
+      range: Math.max(1, finiteNumber(item?.range, Math.min(width, height) * DEFAULT_CAMERA_RANGE_PERCENT / 100)),
+      name: limitedText(item?.name),
+      model: limitedText(item?.model),
+      ip: limitedText(item?.ip),
+      mac: limitedText(item?.mac),
+      mountId: typeof item?.mountId === "string" && mountIds.has(item.mountId) ? item.mountId : null,
+    }));
+    const cameraIds = uniqueIds(cameras, "камеры");
+
+    const equipmentIds = new Set();
+    const cabinets = projectArray(project.cabinets, "шкафы").map((item) => {
+      const equipment = projectArray(item?.equipment ?? [], "оборудование").map((equipmentItem) => {
+        const id = validId(equipmentItem?.id, "оборудования");
+        if (equipmentIds.has(id)) throw new Error("Файл проекта повреждён: повторяется идентификатор оборудования.");
+        equipmentIds.add(id);
+        return {
+          id,
+          type: EQUIPMENT_TYPES.some((type) => type.id === equipmentItem?.type) ? equipmentItem.type : "other",
+          name: limitedText(equipmentItem?.name),
+          model: limitedText(equipmentItem?.model),
+          ip: limitedText(equipmentItem?.ip),
+          ports: limitedText(equipmentItem?.ports, "", 20),
+          note: limitedText(equipmentItem?.note),
+        };
+      });
+      const card = item?.card && typeof item.card === "object" ? item.card : {};
+      return {
+        id: validId(item?.id, "шкафа"),
+        name: limitedText(item?.name),
+        x: clamp(finiteNumber(item?.x), 0, width),
+        y: clamp(finiteNumber(item?.y), 0, height),
+        equipment,
+        card: {
+          open: Boolean(card.open),
+          collapsed: Boolean(card.collapsed),
+          x: Number.isFinite(Number(card.x)) ? Number(card.x) : null,
+          y: Number.isFinite(Number(card.y)) ? Number(card.y) : null,
+          width: clamp(finiteNumber(card.width, CABINET_CARD_WIDTH), MIN_CABINET_CARD_WIDTH, MAX_CABINET_CARD_WIDTH),
+          addMenuOpen: false,
+          editingEquipmentId: null,
+        },
+      };
+    });
+    const cabinetIds = uniqueIds(cabinets, "шкафы");
+
+    const cables = projectArray(project.cables, "кабели").map((item) => {
+      const type = item?.type === "fiber" ? "fiber" : item?.type === "copper" ? "copper" : null;
+      const sourceKind = item?.sourceKind === "camera" ? "camera" : item?.sourceKind === "cabinet" ? "cabinet" : null;
+      const sourceId = validId(item?.sourceId, "источника кабеля");
+      const targetCabinetId = validId(item?.targetCabinetId, "конечного шкафа");
+      const sourceExists = sourceKind === "camera" ? cameraIds.has(sourceId) : sourceKind === "cabinet" && cabinetIds.has(sourceId);
+      if (!type || !sourceKind || !sourceExists || !cabinetIds.has(targetCabinetId)) {
+        throw new Error("Файл проекта повреждён: некорректное подключение кабеля.");
+      }
+      if (sourceKind === "camera" && type !== "copper") {
+        throw new Error("Файл проекта повреждён: камера может подключаться только витой парой.");
+      }
+      return {
+        id: validId(item?.id, "кабеля"),
+        name: limitedText(item?.name),
+        type,
+        sourceKind,
+        sourceId,
+        viaMountIds: projectArray(item?.viaMountIds ?? [], "маршрут кабеля").filter((id) => mountIds.has(id)),
+        targetCabinetId,
+      };
+    });
+    uniqueIds(cables, "кабели");
+
+    const counters = project.counters || {};
+    return {
+      name: limitedText(project.name, fileNameWithoutExtension(map.fileName) || "Проект камер", 200),
+      map: {
+        fileName: limitedText(map.fileName, "Карта", 260),
+        mimeType: /^image\/(png|jpeg)$/i.test(map.mimeType) ? map.mimeType.toLowerCase() : map.dataUrl.slice(5, map.dataUrl.indexOf(";")),
+        width,
+        height,
+        dataUrl: map.dataUrl,
+      },
+      settings: {
+        elementScale: clamp(finiteNumber(project.settings?.elementScale, 1), 0.5, 3),
+      },
+      counters: {
+        nextCameraId: normalizedCounter(counters.nextCameraId, nextNumericId(cameras, "c")),
+        nextMountId: normalizedCounter(counters.nextMountId, nextNumericId(mounts, "m")),
+        nextPoleNumber: normalizedCounter(counters.nextPoleNumber, mounts.filter((item) => item.type === "pole").length + 1),
+        nextPointNumber: normalizedCounter(counters.nextPointNumber, mounts.filter((item) => item.type === "point").length + 1),
+        nextCabinetId: normalizedCounter(counters.nextCabinetId, nextNumericId(cabinets, "cabinet")),
+        nextEquipmentId: normalizedCounter(counters.nextEquipmentId, nextNumericId([...equipmentIds].map((id) => ({ id })), "equipment")),
+        nextCableId: normalizedCounter(counters.nextCableId, nextNumericId(cables, "cable")),
+        nextCopperNumber: normalizedCounter(counters.nextCopperNumber, cables.filter((item) => item.type === "copper").length + 1),
+        nextFiberNumber: normalizedCounter(counters.nextFiberNumber, cables.filter((item) => item.type === "fiber").length + 1),
+      },
+      cameras,
+      mounts,
+      cabinets,
+      cables,
+    };
+  }
+
+  function confirmDiscardChanges(action) {
+    refreshDirtyState();
+    return !state.isDirty || window.confirm(`${action}\n\nНесохранённые изменения будут потеряны.`);
+  }
+
+  function resetProject() {
+    releaseImageUrl();
+    state.imageUrl = null;
+    state.imageData = null;
+    state.imageToken += 1;
+    state.mapFileName = null;
+    state.mapMimeType = null;
+    state.imageWidth = 0;
+    state.imageHeight = 0;
+    state.view = { x: 0, y: 0, scale: 1 };
+    state.fitScale = 1;
+    state.elementScale = 1;
+    state.fitted = false;
+    state.cameras = [];
+    state.mounts = [];
+    state.cabinets = [];
+    state.cables = [];
+    state.nextCameraId = 1;
+    state.nextMountId = 1;
+    state.nextPoleNumber = 1;
+    state.nextPointNumber = 1;
+    state.nextCabinetId = 1;
+    state.nextEquipmentId = 1;
+    state.nextCableId = 1;
+    state.nextCopperNumber = 1;
+    state.nextFiberNumber = 1;
+    state.selectedCameraId = null;
+    state.selectedMountId = null;
+    state.selectedCabinetId = null;
+    state.selectedCableId = null;
+    state.objectInteraction = null;
+    state.snapTargetId = null;
+    state.projectName = "Новый проект";
+    state.projectFileName = null;
+    setActiveTool(null);
+    clearError();
+    elements.mapImage.removeAttribute("src");
+    elements.scene.hidden = true;
+    elements.emptyState.hidden = false;
+    elements.workspace.classList.remove("has-map", "is-dragging");
+    elements.status.textContent = "Карта не загружена";
+    elements.zoomStatus.textContent = "Масштаб: —";
+    elements.elementScaleInput.value = "100";
+    elements.elementScaleValue.value = "100%";
+    setMapControlsEnabled(false);
+    refreshEditor();
+    markProjectClean();
+  }
+
+  async function openProject(file) {
+    clearError();
+    if (!file) return;
+    try {
+      const raw = JSON.parse(await file.text());
+      const project = normalizeProject(raw);
+      let decoded;
+      try {
+        decoded = await decodeImage(project.map.dataUrl);
+      } catch {
+        throw new Error("Файл проекта повреждён: изображение карты не читается.");
+      }
+      if (decoded.naturalWidth !== project.map.width || decoded.naturalHeight !== project.map.height) {
+        throw new Error("Файл проекта повреждён: размер изображения карты не совпадает с данными проекта.");
+      }
+      if (!confirmDiscardChanges("Открыть выбранный проект?")) return;
+
+      releaseImageUrl();
+      state.imageUrl = project.map.dataUrl;
+      state.imageData = project.map.dataUrl;
+      state.imageToken += 1;
+      state.mapFileName = project.map.fileName;
+      state.mapMimeType = project.map.mimeType;
+      state.imageWidth = project.map.width;
+      state.imageHeight = project.map.height;
+      state.elementScale = project.settings.elementScale;
+      state.cameras = project.cameras;
+      state.mounts = project.mounts;
+      state.cabinets = project.cabinets;
+      state.cables = project.cables;
+      Object.assign(state, project.counters);
+      state.selectedCameraId = null;
+      state.selectedMountId = null;
+      state.selectedCabinetId = null;
+      state.selectedCableId = null;
+      state.objectInteraction = null;
+      state.snapTargetId = null;
+      state.projectName = project.name || fileNameWithoutExtension(file.name) || "Проект камер";
+      state.projectFileName = /\.cmap$/i.test(file.name)
+        ? file.name
+        : safeProjectFileName(fileNameWithoutExtension(file.name));
+      setActiveTool(null);
+      elements.elementScaleInput.value = String(Math.round(state.elementScale * 100));
+      elements.elementScaleValue.value = `${Math.round(state.elementScale * 100)}%`;
+      showLoadedMap();
+      refreshEditor();
+      fitMap();
+      markProjectClean();
+    } catch (error) {
+      const detail = error instanceof SyntaxError
+        ? "Не удалось открыть проект: файл повреждён или содержит неверный формат данных."
+        : error.message || "Не удалось открыть выбранный проект.";
+      showError(detail);
+    } finally {
+      elements.projectFileInput.value = "";
+    }
+  }
+
+  function saveProject() {
+    clearError();
+    if (!state.imageData || !state.imageWidth) {
+      showError("Сначала загрузите карту, затем сохраните проект.");
+      return;
+    }
+    const fileName = state.projectFileName || safeProjectFileName(state.projectName);
+    const payload = {
+      format: PROJECT_FORMAT,
+      version: PROJECT_VERSION,
+      savedAt: new Date().toISOString(),
+      project: projectContent(true),
+    };
+    const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    state.projectFileName = fileName;
+    markProjectClean();
+    elements.saveProjectButton.classList.add("is-saved");
+    elements.saveProjectButton.title = "Проект сохранён";
+    elements.saveProjectButton.setAttribute("aria-label", "Проект сохранён");
+    elements.saveProjectButton.dataset.tooltip = "Проект сохранён";
+    window.setTimeout(() => {
+      elements.saveProjectButton.classList.remove("is-saved");
+      elements.saveProjectButton.title = "Сохранить проект";
+      elements.saveProjectButton.setAttribute("aria-label", "Сохранить проект");
+      elements.saveProjectButton.dataset.tooltip = "Сохранить проект";
+    }, 1400);
+  }
+
   async function loadMap(file) {
     clearError();
     if (!file) return;
@@ -1489,33 +1964,36 @@
         throw new Error("damaged");
       }
 
-      if (state.imageUrl) URL.revokeObjectURL(state.imageUrl);
+      let imageData;
+      try {
+        imageData = await readFileAsDataUrl(file);
+      } catch {
+        URL.revokeObjectURL(nextUrl);
+        throw new Error("read");
+      }
+
+      releaseImageUrl();
       state.imageUrl = nextUrl;
+      state.imageData = imageData;
+      state.imageToken += 1;
+      state.mapFileName = file.name;
+      state.mapMimeType = file.type === "image/png" ? "image/png" : "image/jpeg";
       state.imageWidth = decoded.naturalWidth;
       state.imageHeight = decoded.naturalHeight;
+      if (!state.cameras.length && !state.mounts.length && !state.cabinets.length && !state.cables.length && state.projectName === "Новый проект") {
+        state.projectName = fileNameWithoutExtension(file.name) || "Проект камер";
+      }
       [...state.mounts, ...state.cameras, ...state.cabinets].forEach((object) => {
         object.x = clamp(object.x, 0, state.imageWidth);
         object.y = clamp(object.y, 0, state.imageHeight);
       });
       state.cameras.forEach(normalizeCameraRange);
 
-      elements.scene.style.width = `${state.imageWidth}px`;
-      elements.scene.style.height = `${state.imageHeight}px`;
-      elements.mapImage.src = nextUrl;
-      elements.mapImage.alt = `Карта «${file.name}»`;
-      elements.scene.hidden = false;
-      elements.emptyState.hidden = true;
-      elements.workspace.classList.add("has-map");
-      elements.fitButton.disabled = false;
-      elements.cameraTool.disabled = false;
-      elements.poleTool.disabled = false;
-      elements.mountTool.disabled = false;
-      elements.cabinetTool.disabled = false;
-      elements.cableTool.disabled = false;
-      elements.status.textContent = `${file.name} · ${state.imageWidth} × ${state.imageHeight} px`;
+      showLoadedMap();
       renderObjects();
       renderObjectList();
       fitMap();
+      refreshDirtyState();
     } catch (error) {
       let detail = "Не удалось прочитать выбранный файл. Проверьте доступ к нему и попробуйте снова.";
       if (error.message === "unsupported") {
@@ -1539,6 +2017,11 @@
   }
 
   elements.fileInput.addEventListener("change", (event) => loadMap(event.target.files[0]));
+  elements.projectFileInput.addEventListener("change", (event) => openProject(event.target.files[0]));
+  elements.newProjectButton.addEventListener("click", () => {
+    if (confirmDiscardChanges("Создать новый проект?")) resetProject();
+  });
+  elements.saveProjectButton.addEventListener("click", saveProject);
   elements.fitButton.addEventListener("click", fitMap);
   elements.elementScaleInput.addEventListener("input", (event) => {
     state.elementScale = Number(event.target.value) / 100;
@@ -2039,7 +2522,20 @@
   });
 
   resizeObserver.observe(elements.workspace);
-  window.addEventListener("beforeunload", () => {
-    if (state.imageUrl) URL.revokeObjectURL(state.imageUrl);
+
+  document.addEventListener("input", refreshDirtyState);
+  document.addEventListener("change", () => window.queueMicrotask(refreshDirtyState));
+  document.addEventListener("click", () => window.queueMicrotask(refreshDirtyState));
+  window.addEventListener("pointerup", () => window.queueMicrotask(refreshDirtyState));
+  window.addEventListener("pointercancel", () => window.queueMicrotask(refreshDirtyState));
+
+  window.addEventListener("beforeunload", (event) => {
+    refreshDirtyState();
+    if (!state.isDirty) return;
+    event.preventDefault();
+    event.returnValue = "";
   });
+  window.addEventListener("pagehide", releaseImageUrl);
+
+  markProjectClean();
 })();
