@@ -191,6 +191,21 @@
               <p class="empty-state__hint">Выберите изображение PNG или JPG</p>
             </div>
             <div id="placement-hint" class="placement-hint" hidden>Щёлкните по карте, чтобы поставить камеру</div>
+            <div id="cable-type-picker" class="cable-type-picker" role="dialog" aria-labelledby="cable-type-picker-title" hidden>
+              <strong id="cable-type-picker-title">Кабель между шкафами</strong>
+              <span>Выберите тип линии</span>
+              <div class="cable-type-picker__actions">
+                <button id="choose-fiber-cable" class="cable-type-choice cable-type-choice--fiber" type="button">
+                  <i aria-hidden="true"></i>
+                  Оптика
+                </button>
+                <button id="choose-copper-cable" class="cable-type-choice cable-type-choice--copper" type="button">
+                  <i aria-hidden="true"></i>
+                  Витая пара
+                </button>
+              </div>
+              <button id="cancel-cable-type" class="cable-type-picker__cancel" type="button">Отмена</button>
+            </div>
             <div id="scene" class="scene" hidden>
               <img id="map-image" class="map-layer" alt="Загруженная карта" draggable="false">
               <div id="objects-layer" class="objects-layer"></div>

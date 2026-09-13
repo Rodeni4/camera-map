@@ -71,6 +71,10 @@
     workspace: document.querySelector("#workspace"),
     emptyState: document.querySelector("#empty-state"),
     placementHint: document.querySelector("#placement-hint"),
+    cableTypePicker: document.querySelector("#cable-type-picker"),
+    chooseFiberCable: document.querySelector("#choose-fiber-cable"),
+    chooseCopperCable: document.querySelector("#choose-copper-cable"),
+    cancelCableType: document.querySelector("#cancel-cable-type"),
     scene: document.querySelector("#scene"),
     mapImage: document.querySelector("#map-image"),
     objectsLayer: document.querySelector("#objects-layer"),
@@ -155,6 +159,7 @@
     objectInteraction: null,
     snapTargetId: null,
     cableDraft: null,
+    pendingCableSourceId: null,
   };
 
   const SVG_NS = "http://www.w3.org/2000/svg";
@@ -817,9 +822,24 @@
     });
   }
 
+  function hideCableTypePicker() {
+    elements.cableTypePicker.hidden = true;
+  }
+
+  function showCableTypePicker(cabinet) {
+    state.pendingCableSourceId = cabinet.id;
+    elements.cableTypePicker.hidden = false;
+    updateCablePlacementHint();
+    window.requestAnimationFrame(() => elements.chooseFiberCable.focus());
+  }
+
   function setActiveTool(tool, cameraMountId = null) {
-    const clearedCableDraft = tool !== "cable" && Boolean(state.cableDraft);
-    if (clearedCableDraft) state.cableDraft = null;
+    const clearedCableState = tool !== "cable" && Boolean(state.cableDraft || state.pendingCableSourceId);
+    if (tool !== "cable") {
+      state.cableDraft = null;
+      state.pendingCableSourceId = null;
+      hideCableTypePicker();
+    }
     state.activeTool = tool && state.imageWidth ? tool : null;
     state.cameraMountId = state.activeTool === "camera" ? cameraMountId : null;
     elements.cameraTool.setAttribute("aria-pressed", String(state.activeTool === "camera"));
@@ -830,7 +850,7 @@
     elements.workspace.classList.toggle("is-placing", Boolean(state.activeTool));
     elements.placementHint.hidden = !state.activeTool;
     if (!state.activeTool) {
-      if (clearedCableDraft) renderObjects();
+      if (clearedCableState) renderObjects();
       return;
     }
 
@@ -912,6 +932,10 @@
       elements.placementHint.textContent = message;
       return;
     }
+    if (state.pendingCableSourceId) {
+      elements.placementHint.textContent = "Выберите тип кабеля между шкафами";
+      return;
+    }
     const draft = state.cableDraft;
     if (!draft) {
       elements.placementHint.textContent = "Выберите камеру для витой пары или шкаф для оптики";
@@ -936,14 +960,25 @@
     } else {
       const cabinet = getCabinet(id);
       if (!cabinet) return;
-      state.cableDraft = {
-        type: "fiber",
-        sourceKind: "cabinet",
-        sourceId: cabinet.id,
-        viaMountIds: [],
-        targetCabinetId: null,
-      };
+      showCableTypePicker(cabinet);
+      return;
     }
+    updateCablePlacementHint();
+    renderObjects();
+  }
+
+  function startCabinetCable(type) {
+    const cabinet = getCabinet(state.pendingCableSourceId);
+    if (!cabinet || (type !== "fiber" && type !== "copper")) return;
+    state.cableDraft = {
+      type,
+      sourceKind: "cabinet",
+      sourceId: cabinet.id,
+      viaMountIds: [],
+      targetCabinetId: null,
+    };
+    state.pendingCableSourceId = null;
+    hideCableTypePicker();
     updateCablePlacementHint();
     renderObjects();
   }
@@ -952,8 +987,8 @@
     const draft = state.cableDraft;
     const target = getCabinet(targetCabinetId);
     if (!draft || !target) return;
-    if (draft.type === "fiber" && draft.sourceId === target.id) {
-      updateCablePlacementHint("Для оптики выберите другой шкаф");
+    if (draft.sourceKind === "cabinet" && draft.sourceId === target.id) {
+      updateCablePlacementHint("Выберите другой конечный шкаф");
       return;
     }
 
@@ -973,6 +1008,10 @@
   }
 
   function handleCableNode(kind, id) {
+    if (state.pendingCableSourceId) {
+      updateCablePlacementHint("Сначала выберите тип кабеля");
+      return;
+    }
     if (!state.cableDraft) {
       if (kind === "camera" || kind === "cabinet") startCable(kind, id);
       else updateCablePlacementHint("Сначала выберите камеру или шкаф");
@@ -1136,6 +1175,10 @@
     clearSelection();
     setActiveTool(active ? null : "cable");
   });
+  elements.cableTypePicker.addEventListener("pointerdown", (event) => event.stopPropagation());
+  elements.chooseFiberCable.addEventListener("click", () => startCabinetCable("fiber"));
+  elements.chooseCopperCable.addEventListener("click", () => startCabinetCable("copper"));
+  elements.cancelCableType.addEventListener("click", () => setActiveTool(null));
 
   elements.nameInput.addEventListener("input", (event) => updateCamera("name", event.target.value));
   elements.modelInput.addEventListener("input", (event) => updateCamera("model", event.target.value));

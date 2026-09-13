@@ -482,6 +482,77 @@ button, input { font: inherit; }
   pointer-events: none;
 }
 
+.cable-type-picker {
+  position: absolute;
+  z-index: 12;
+  top: 48px;
+  left: 50%;
+  width: min(310px, calc(100% - 24px));
+  padding: 13px;
+  border: 1px solid #cbd2dd;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgb(19 30 48 / 24%);
+  transform: translateX(-50%);
+  cursor: default;
+}
+
+.cable-type-picker > strong,
+.cable-type-picker > span { display: block; }
+.cable-type-picker > strong { color: #263247; font-size: 14px; }
+.cable-type-picker > span { margin-top: 3px; color: #748095; font-size: 11px; }
+
+.cable-type-picker__actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  margin-top: 11px;
+}
+
+.cable-type-choice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 7px 9px;
+  border: 1px solid #cbd2dd;
+  border-radius: 7px;
+  color: #263247;
+  background: #f8fafc;
+  cursor: pointer;
+}
+
+.cable-type-choice:hover,
+.cable-type-choice:focus-visible {
+  border-color: #8794a8;
+  background: #eef2f7;
+  outline: none;
+}
+
+.cable-type-choice i {
+  width: 22px;
+  height: 3px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.cable-type-choice--fiber i { color: #e2b800; }
+.cable-type-choice--copper i { color: #111827; }
+
+.cable-type-picker__cancel {
+  display: block;
+  margin: 9px auto 0;
+  padding: 4px 8px;
+  border: 0;
+  color: #697386;
+  background: transparent;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.cable-type-picker__cancel:hover { color: #a12620; }
+
 .empty-state {
   position: absolute;
   inset: 0;
