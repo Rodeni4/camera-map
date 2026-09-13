@@ -169,6 +169,7 @@
     nextPoleNumber: 1,
     nextPointNumber: 1,
     nextCabinetId: 1,
+    nextEquipmentId: 1,
     nextCableId: 1,
     nextCopperNumber: 1,
     nextFiberNumber: 1,
@@ -183,6 +184,7 @@
     cableDraft: null,
     pendingCableSourceId: null,
     lastCabinetPointerDown: null,
+    lastCardResizePointerDown: null,
   };
 
   const SVG_NS = "http://www.w3.org/2000/svg";
@@ -190,8 +192,19 @@
   const DEFAULT_CAMERA_RANGE_PERCENT = 20;
   const ROTATION_HANDLE_GAP = 32;
   const CABINET_CARD_WIDTH = 340;
-  const CABINET_CARD_HEADER_HEIGHT = 44;
-  const CABINET_CARD_HEIGHT = 126;
+  const MIN_CABINET_CARD_WIDTH = 260;
+  const MAX_CABINET_CARD_WIDTH = 620;
+  const CABINET_CARD_HEADER_HEIGHT = 34;
+  const CABINET_CARD_HEIGHT = 98;
+  const EQUIPMENT_TYPES = [
+    { id: "wifi-router", name: "Wi-Fi-роутер", icon: "≋" },
+    { id: "switch", name: "Коммутатор", icon: "▦" },
+    { id: "poe-switch", name: "PoE-коммутатор", icon: "P" },
+    { id: "nvr", name: "Видеорегистратор", icon: "●" },
+    { id: "optical-cross", name: "Оптический кросс", icon: "✣" },
+    { id: "optical-device", name: "Оптическое устройство", icon: "⇄" },
+    { id: "other", name: "Другое оборудование", icon: "◇" },
+  ];
 
   function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
@@ -211,9 +224,49 @@
 
   function getCabinetCard(cabinet) {
     if (!cabinet.card) {
-      cabinet.card = { open: false, collapsed: false, x: null, y: null };
+      cabinet.card = { open: false, collapsed: false, x: null, y: null, addMenuOpen: false, editingEquipmentId: null };
     }
+    if (typeof cabinet.card.addMenuOpen !== "boolean") cabinet.card.addMenuOpen = false;
+    if (!("editingEquipmentId" in cabinet.card)) cabinet.card.editingEquipmentId = null;
+    if (!Number.isFinite(cabinet.card.width)) cabinet.card.width = CABINET_CARD_WIDTH;
     return cabinet.card;
+  }
+
+  function equipmentType(typeId) {
+    return EQUIPMENT_TYPES.find((type) => type.id === typeId) || EQUIPMENT_TYPES[EQUIPMENT_TYPES.length - 1];
+  }
+
+  function cabinetEquipment(cabinet) {
+    if (!Array.isArray(cabinet.equipment)) cabinet.equipment = [];
+    return cabinet.equipment;
+  }
+
+  function equipmentCountText(count) {
+    const lastTwo = count % 100;
+    const last = count % 10;
+    if (last === 1 && lastTwo !== 11) return `${count} устройство`;
+    if (last >= 2 && last <= 4 && (lastTwo < 12 || lastTwo > 14)) return `${count} устройства`;
+    return `${count} устройств`;
+  }
+
+  function addEquipment(cabinet, typeId) {
+    const type = equipmentType(typeId);
+    const equipmentList = cabinetEquipment(cabinet);
+    const sameTypeCount = equipmentList.filter((item) => item.type === type.id).length;
+    const equipment = {
+      id: `equipment${state.nextEquipmentId++}`,
+      type: type.id,
+      name: `${type.name} ${sameTypeCount + 1}`,
+      model: "",
+      ip: "",
+      ports: "",
+      note: "",
+    };
+    equipmentList.push(equipment);
+    const card = getCabinetCard(cabinet);
+    card.addMenuOpen = false;
+    card.editingEquipmentId = equipment.id;
+    renderObjects();
   }
 
   function openCabinetCard(cabinet) {
@@ -224,9 +277,11 @@
       const cabinetScreenX = state.view.x + cabinet.x * state.view.scale;
       const cabinetScreenY = state.view.y + cabinet.y * state.view.scale;
       const cascade = openCount * 22;
-      const maxLeft = Math.max(12, rect.width - CABINET_CARD_WIDTH - 12);
+      const cardScreenWidth = card.width * state.elementScale;
+      const cardScreenHeight = CABINET_CARD_HEIGHT * state.elementScale;
+      const maxLeft = Math.max(12, rect.width - cardScreenWidth - 12);
       const desiredLeft = clamp(cabinetScreenX + 42 + cascade, 12, maxLeft);
-      const desiredTop = clamp(cabinetScreenY - 30 + cascade, 12, Math.max(12, rect.height - CABINET_CARD_HEIGHT - 12));
+      const desiredTop = clamp(cabinetScreenY - 30 + cascade, 12, Math.max(12, rect.height - cardScreenHeight - 12));
       const scenePoint = AppMath.toScene(state.view, desiredLeft, desiredTop);
       card.x = scenePoint.x;
       card.y = scenePoint.y;
@@ -279,6 +334,7 @@
     elements.scene.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
     elements.objectsLayer.style.setProperty("--ui-scale", String(1 / scale));
     elements.objectsLayer.style.setProperty("--element-scale", String(state.elementScale));
+    elements.objectsLayer.style.setProperty("--card-scale", String(state.elementScale / scale));
     elements.objectsLayer.style.setProperty("--tooltip-scale", String(1 / (scale * state.elementScale)));
     elements.zoomStatus.textContent = `Масштаб: ${Math.round(scale * 100)}%`;
   }
@@ -539,11 +595,17 @@
   function appendCabinetCardLink(cabinet) {
     const card = getCabinetCard(cabinet);
     if (!card.open) return;
-    const cardHeight = (card.collapsed ? CABINET_CARD_HEADER_HEIGHT : CABINET_CARD_HEIGHT) / state.view.scale;
+    const cardElement = elements.objectsLayer.querySelector(`[data-cabinet-card-id="${cabinet.id}"]`);
+    const cardWidth = cardElement
+      ? cardElement.getBoundingClientRect().width / state.view.scale
+      : card.width * state.elementScale / state.view.scale;
+    const cardHeight = cardElement
+      ? cardElement.getBoundingClientRect().height / state.view.scale
+      : (card.collapsed ? CABINET_CARD_HEADER_HEIGHT : CABINET_CARD_HEIGHT) * state.elementScale / state.view.scale;
     const cardBounds = {
       x: card.x,
       y: card.y,
-      width: CABINET_CARD_WIDTH / state.view.scale,
+      width: cardWidth,
       height: cardHeight,
     };
     const end = AppMath.closestPointOnRect(cabinet, cardBounds);
@@ -562,6 +624,135 @@
     elements.objectsLayer.append(line);
   }
 
+  function updateEquipmentSummary(nameNode, detailsNode, equipment) {
+    nameNode.textContent = equipment.name || equipmentType(equipment.type).name;
+    detailsNode.replaceChildren();
+    const values = [
+      ["Модель", equipment.model],
+      ["IP", equipment.ip],
+      ["Портов", equipment.ports],
+      ["Примечание", equipment.note],
+    ];
+    values.forEach(([label, value]) => {
+      if (!String(value || "").trim()) return;
+      const detail = document.createElement("span");
+      detail.textContent = `${label}: ${value}`;
+      detailsNode.append(detail);
+    });
+  }
+
+  function makeEquipmentField(labelText, equipment, field, options = {}) {
+    const label = document.createElement("label");
+    label.className = `cabinet-equipment-field cabinet-equipment-field--${field}`;
+    const caption = document.createElement("span");
+    caption.textContent = labelText;
+    const input = options.multiline ? document.createElement("textarea") : document.createElement("input");
+    if (!options.multiline) input.type = options.type || "text";
+    input.value = equipment[field] || "";
+    if (options.placeholder) input.placeholder = options.placeholder;
+    if (options.inputMode) input.inputMode = options.inputMode;
+    if (options.min) input.min = options.min;
+    if (options.max) input.max = options.max;
+    input.addEventListener("input", () => {
+      equipment[field] = input.value;
+      const item = input.closest(".cabinet-equipment");
+      updateEquipmentSummary(
+        item.querySelector(".cabinet-equipment__name"),
+        item.querySelector(".cabinet-equipment__details"),
+        equipment,
+      );
+    });
+    if (field === "ports") {
+      input.addEventListener("change", () => {
+        if (input.value === "") return;
+        equipment.ports = String(clamp(Math.round(Number(input.value) || 1), 1, 512));
+        input.value = equipment.ports;
+        const item = input.closest(".cabinet-equipment");
+        updateEquipmentSummary(
+          item.querySelector(".cabinet-equipment__name"),
+          item.querySelector(".cabinet-equipment__details"),
+          equipment,
+        );
+      });
+    }
+    label.append(caption, input);
+    return label;
+  }
+
+  function makeEquipmentItem(cabinet, equipment, cardState) {
+    const type = equipmentType(equipment.type);
+    const item = document.createElement("article");
+    item.className = "cabinet-equipment";
+    if (cardState.editingEquipmentId === equipment.id) item.classList.add("is-editing");
+    item.dataset.equipmentId = equipment.id;
+    item.dataset.equipmentType = equipment.type;
+
+    const row = document.createElement("div");
+    row.className = "cabinet-equipment__row";
+    const main = document.createElement("button");
+    main.type = "button";
+    main.className = "cabinet-equipment__main";
+    main.setAttribute("aria-label", `Редактировать: ${equipment.name || type.name}`);
+    const icon = document.createElement("span");
+    icon.className = `cabinet-equipment__icon cabinet-equipment__icon--${type.id}`;
+    icon.textContent = type.icon;
+    icon.setAttribute("aria-hidden", "true");
+    const heading = document.createElement("span");
+    heading.className = "cabinet-equipment__heading";
+    const name = document.createElement("strong");
+    name.className = "cabinet-equipment__name";
+    const typeName = document.createElement("small");
+    typeName.textContent = type.name;
+    heading.append(name, typeName);
+    main.append(icon, heading);
+    main.addEventListener("click", () => {
+      cardState.editingEquipmentId = cardState.editingEquipmentId === equipment.id ? null : equipment.id;
+      cardState.addMenuOpen = false;
+      renderObjects();
+    });
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "cabinet-equipment__remove";
+    remove.textContent = "×";
+    remove.title = "Удалить оборудование";
+    remove.setAttribute("aria-label", `Удалить: ${equipment.name || type.name}`);
+    remove.addEventListener("click", () => {
+      cabinet.equipment = cabinetEquipment(cabinet).filter((item) => item.id !== equipment.id);
+      if (cardState.editingEquipmentId === equipment.id) cardState.editingEquipmentId = null;
+      renderObjects();
+    });
+    row.append(main, remove);
+
+    const details = document.createElement("div");
+    details.className = "cabinet-equipment__details";
+    updateEquipmentSummary(name, details, equipment);
+    item.append(row, details);
+
+    if (cardState.editingEquipmentId === equipment.id) {
+      const editor = document.createElement("div");
+      editor.className = "cabinet-equipment__editor";
+      editor.append(
+        makeEquipmentField("Название", equipment, "name"),
+        makeEquipmentField("Модель", equipment, "model", { placeholder: "Не указана" }),
+        makeEquipmentField("IP-адрес", equipment, "ip", { placeholder: "Необязательно", inputMode: "decimal" }),
+        makeEquipmentField("Количество портов", equipment, "ports", { type: "number", min: "1", max: "512", placeholder: "Необязательно" }),
+        makeEquipmentField("Примечание", equipment, "note", { multiline: true, placeholder: "Необязательно" }),
+      );
+      const done = document.createElement("button");
+      done.type = "button";
+      done.className = "button button--primary cabinet-equipment__done";
+      done.textContent = "Готово";
+      done.addEventListener("click", () => {
+        cardState.editingEquipmentId = null;
+        renderObjects();
+      });
+      editor.append(done);
+      item.append(editor);
+    }
+    return item;
+  }
+
   function appendCabinetCard(cabinet) {
     const cardState = getCabinetCard(cabinet);
     if (!cardState.open) return;
@@ -573,6 +764,7 @@
     card.dataset.cabinetCardId = cabinet.id;
     card.style.left = `${cardState.x}px`;
     card.style.top = `${cardState.y}px`;
+    card.style.width = `${cardState.width}px`;
 
     const header = document.createElement("header");
     header.className = "cabinet-card__header";
@@ -588,21 +780,12 @@
     const name = document.createElement("strong");
     name.textContent = cabinet.name || "Шкаф без названия";
     const count = document.createElement("span");
-    count.textContent = `${cabinet.equipment?.length || 0} устройств`;
+    const equipmentList = cabinetEquipment(cabinet);
+    count.textContent = `· ${equipmentCountText(equipmentList.length)}`;
     title.append(name, count);
 
     const actions = document.createElement("div");
     actions.className = "cabinet-card__actions";
-
-    const locate = document.createElement("button");
-    locate.type = "button";
-    locate.textContent = "⌖";
-    locate.title = "Показать шкаф на карте";
-    locate.setAttribute("aria-label", "Показать шкаф на карте");
-    locate.addEventListener("click", () => {
-      selectCabinet(cabinet.id);
-      ensurePointVisible(cabinet);
-    });
 
     const collapse = document.createElement("button");
     collapse.type = "button";
@@ -624,17 +807,63 @@
       renderObjects();
     });
 
-    actions.append(locate, collapse, close);
+    actions.append(collapse, close);
     header.append(dragMark, title, actions);
 
     const body = document.createElement("div");
     body.className = "cabinet-card__body";
     body.hidden = cardState.collapsed;
-    const empty = document.createElement("p");
-    empty.className = "cabinet-card__empty";
-    empty.textContent = "Оборудование пока не добавлено";
-    body.append(empty);
-    card.append(header, body);
+
+    const addButton = document.createElement("button");
+    addButton.type = "button";
+    addButton.className = "button cabinet-equipment-add";
+    addButton.textContent = "+ Добавить оборудование";
+    addButton.setAttribute("aria-expanded", String(cardState.addMenuOpen));
+    addButton.addEventListener("click", () => {
+      cardState.addMenuOpen = !cardState.addMenuOpen;
+      cardState.editingEquipmentId = null;
+      renderObjects();
+    });
+    body.append(addButton);
+
+    if (cardState.addMenuOpen) {
+      const menu = document.createElement("div");
+      menu.className = "cabinet-equipment-menu";
+      EQUIPMENT_TYPES.forEach((type) => {
+        const option = document.createElement("button");
+        option.type = "button";
+        option.dataset.equipmentType = type.id;
+        const icon = document.createElement("span");
+        icon.textContent = type.icon;
+        icon.setAttribute("aria-hidden", "true");
+        const label = document.createElement("strong");
+        label.textContent = type.name;
+        option.append(icon, label);
+        option.addEventListener("click", () => addEquipment(cabinet, type.id));
+        menu.append(option);
+      });
+      body.append(menu);
+    }
+
+    if (equipmentList.length) {
+      const list = document.createElement("div");
+      list.className = "cabinet-equipment-list";
+      equipmentList.forEach((equipment) => list.append(makeEquipmentItem(cabinet, equipment, cardState)));
+      body.append(list);
+    } else {
+      const empty = document.createElement("p");
+      empty.className = "cabinet-card__empty";
+      empty.textContent = "Оборудование пока не добавлено";
+      body.append(empty);
+    }
+    const resizeHandle = document.createElement("div");
+    resizeHandle.className = "cabinet-card__resize-handle";
+    resizeHandle.dataset.cabinetCardId = cabinet.id;
+    resizeHandle.title = "Потяните для изменения ширины. Двойной щелчок — стандартная ширина";
+    resizeHandle.setAttribute("role", "separator");
+    resizeHandle.setAttribute("aria-orientation", "vertical");
+    resizeHandle.setAttribute("aria-label", "Изменить ширину карточки");
+    card.append(header, body, resizeHandle);
     elements.objectsLayer.append(card);
   }
 
@@ -669,9 +898,9 @@
     });
     state.cameras.forEach(appendCamera);
     state.mounts.forEach(appendMount);
-    state.cabinets.forEach(appendCabinetCardLink);
     state.cabinets.forEach(appendCabinet);
     state.cabinets.forEach(appendCabinetCard);
+    state.cabinets.forEach(appendCabinetCardLink);
   }
 
   function makeListCamera(camera, index) {
@@ -1080,7 +1309,15 @@
       x: point.x,
       y: point.y,
       equipment: [],
-      card: { open: false, collapsed: false, x: null, y: null },
+      card: {
+        open: false,
+        collapsed: false,
+        x: null,
+        y: null,
+        width: CABINET_CARD_WIDTH,
+        addMenuOpen: false,
+        editingEquipmentId: null,
+      },
     };
     state.cabinets.push(cabinet);
     setActiveTool(null);
@@ -1481,10 +1718,42 @@
     if (event.button !== 0) return;
     const cabinetCard = event.target.closest(".cabinet-card");
     if (cabinetCard) {
-      event.preventDefault();
       event.stopPropagation();
+      const resizeHandle = event.target.closest(".cabinet-card__resize-handle");
+      if (resizeHandle) {
+        event.preventDefault();
+        const cabinet = getCabinet(cabinetCard.dataset.cabinetCardId);
+        const card = cabinet && getCabinetCard(cabinet);
+        if (!cabinet || !card) return;
+        const now = performance.now();
+        const previous = state.lastCardResizePointerDown;
+        const isDoubleClick = previous && previous.cabinetId === cabinet.id && now - previous.time < 450 &&
+          Math.abs(event.clientX - previous.clientX) < 8;
+        state.lastCardResizePointerDown = isDoubleClick ? null : {
+          cabinetId: cabinet.id,
+          time: now,
+          clientX: event.clientX,
+        };
+        if (isDoubleClick) {
+          card.width = CABINET_CARD_WIDTH;
+          selectCabinet(cabinet.id);
+          return;
+        }
+        const interaction = {
+          type: "resizeCabinetCard",
+          cabinetId: cabinet.id,
+          startClientX: event.clientX,
+          startWidth: card.width,
+        };
+        selectCabinet(cabinet.id);
+        state.objectInteraction = interaction;
+        return;
+      }
+      if (event.target.closest("button, input, textarea, select, label")) return;
       const header = event.target.closest(".cabinet-card__header");
-      if (!header || event.target.closest("button")) return;
+      if (!header) return;
+      event.preventDefault();
+      state.lastCardResizePointerDown = null;
       const cabinet = getCabinet(cabinetCard.dataset.cabinetCardId);
       const card = cabinet && getCabinetCard(cabinet);
       if (!cabinet || !card) return;
@@ -1609,7 +1878,17 @@
     const interaction = state.objectInteraction;
     if (!interaction) return;
 
-    if (interaction.type === "moveCabinetCard") {
+    if (interaction.type === "resizeCabinetCard") {
+      const cabinet = getCabinet(interaction.cabinetId);
+      const card = cabinet && getCabinetCard(cabinet);
+      if (!card) return;
+      if (Math.abs(event.clientX - interaction.startClientX) > 4) state.lastCardResizePointerDown = null;
+      card.width = clamp(
+        interaction.startWidth + (event.clientX - interaction.startClientX) / state.elementScale,
+        MIN_CABINET_CARD_WIDTH,
+        MAX_CABINET_CARD_WIDTH,
+      );
+    } else if (interaction.type === "moveCabinetCard") {
       const cabinet = getCabinet(interaction.cabinetId);
       const card = cabinet && getCabinetCard(cabinet);
       if (!card) return;
