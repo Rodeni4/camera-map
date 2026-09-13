@@ -49,6 +49,10 @@
             title="Показать названия камер" aria-label="Показать названия камер" aria-pressed="false" data-tooltip="Показать названия камер">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.75 12s3.5-5.5 9.25-5.5 9.25 5.5 9.25 5.5-3.5 5.5-9.25 5.5S2.75 12 2.75 12Z"/><circle cx="12" cy="12" r="2.5"/></svg>
           </button>
+          <button id="save-pdf" class="button toolbar-icon-button" type="button" disabled
+            title="Сохранить в PDF" aria-label="Сохранить в PDF" data-tooltip="Сохранить в PDF">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2.75h8.25L19 7.5v13.75H6V2.75Zm8 0V8h5M8.5 16.75v-5h2a1.5 1.5 0 0 1 0 3h-2m5.25 2v-5h1.5a2 2 0 0 1 2 2.5 2 2 0 0 1-2 2.5h-1.5"/></svg>
+          </button>
           <label class="button button--primary toolbar-icon-button" for="map-file"
             title="Загрузить карту" aria-label="Загрузить карту" data-tooltip="Загрузить карту">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.25 4.25h15.5v15.5H4.25V4.25Zm0 11.5 4-4 3 3 2-2 6.5 6.5M15.75 7.75v4m-2-2h4"/></svg>
@@ -275,6 +279,16 @@
       </div>
       <div id="error-message" class="message message--error" role="alert" hidden></div>
     </main>
+    <section id="print-sheet" class="print-sheet" aria-hidden="true">
+      <header class="print-sheet__header">
+        <h1 id="print-title"></h1>
+        <div class="print-sheet__meta">
+          <span id="print-summary"></span>
+          <time id="print-date"></time>
+        </div>
+      </header>
+      <div id="print-diagram" class="print-diagram"></div>
+    </section>
     <script src="app.js"></script>
   </body>
 </html>

@@ -1685,6 +1685,118 @@ button, input, textarea { font: inherit; }
   border: 0;
 }
 
+.print-sheet { display: none; }
+
+body.is-preparing-print .print-sheet {
+  position: fixed;
+  top: 0;
+  left: -200vw;
+  display: block;
+}
+
+.print-sheet {
+  width: 277mm;
+  color: #172033;
+  background: #fff;
+  print-color-adjust: exact;
+  -webkit-print-color-adjust: exact;
+}
+
+.print-sheet__header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12mm;
+  min-height: 11mm;
+  margin-bottom: 3mm;
+  padding-bottom: 2mm;
+  border-bottom: 0.3mm solid #cbd2dd;
+}
+
+.print-sheet__header h1 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 16pt;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.print-sheet__meta {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 1mm;
+  color: #667085;
+  font-size: 8pt;
+  text-align: right;
+}
+
+.print-diagram {
+  position: relative;
+  width: 277mm;
+  height: 174mm;
+  overflow: hidden;
+  border: 0.3mm solid #bfc7d3;
+  background: #fff;
+}
+
+.print-scene { position: absolute; }
+
+.print-camera-labels {
+  position: absolute;
+  z-index: 8;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.print-sheet .rotation-line,
+.print-sheet .rotation-handle,
+.print-sheet .range-handle,
+.print-sheet .range-tooltip,
+.print-sheet .camera-tooltip,
+.print-sheet .mount-tooltip,
+.print-sheet .cabinet-tooltip,
+.print-sheet .attachment-line,
+.print-sheet .cabinet-card__drag-mark,
+.print-sheet .cabinet-card__actions,
+.print-sheet .cabinet-equipment-add,
+.print-sheet .cabinet-equipment-menu,
+.print-sheet .cabinet-equipment__remove,
+.print-sheet .cabinet-equipment__editor,
+.print-sheet .cabinet-card__resize-handle { display: none !important; }
+
+.print-sheet .cabinet-card {
+  box-shadow: 0 1px 5px rgb(19 30 48 / 14%);
+  pointer-events: none;
+}
+
+.print-sheet .cabinet-card__header,
+.print-sheet .cabinet-equipment__main { cursor: default; }
+
+@page {
+  size: A4 landscape;
+  margin: 10mm;
+}
+
+@media print {
+  html,
+  body {
+    width: auto;
+    height: auto;
+    overflow: visible;
+    background: #fff;
+  }
+
+  body > .app { display: none !important; }
+
+  .print-sheet {
+    position: static;
+    display: block !important;
+  }
+}
+
 @media (max-width: 1180px) {
   .toolbar { flex-wrap: wrap; gap: 8px 16px; }
   .document-status { order: 1; }

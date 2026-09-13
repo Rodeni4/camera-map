@@ -155,6 +155,7 @@
     undoButton: document.querySelector("#undo-action"),
     redoButton: document.querySelector("#redo-action"),
     toggleLabelsButton: document.querySelector("#toggle-labels"),
+    savePdfButton: document.querySelector("#save-pdf"),
     projectStatus: document.querySelector("#project-status"),
     fitButton: document.querySelector("#fit-button"),
     workspace: document.querySelector("#workspace"),
@@ -223,6 +224,11 @@
     deleteCable: document.querySelector("#delete-cable"),
     closeCableProperties: document.querySelector("#close-cable-properties"),
     propertiesPopover: document.querySelector("#properties-popover"),
+    printSheet: document.querySelector("#print-sheet"),
+    printTitle: document.querySelector("#print-title"),
+    printSummary: document.querySelector("#print-summary"),
+    printDate: document.querySelector("#print-date"),
+    printDiagram: document.querySelector("#print-diagram"),
   };
 
   elements.propertiesPopover.append(
@@ -284,6 +290,7 @@
     historySnapshot: null,
     historyCoalesceKey: null,
     applyingHistory: false,
+    titleBeforePrint: null,
   };
 
   const SVG_NS = "http://www.w3.org/2000/svg";
@@ -1046,6 +1053,7 @@
     if (!distance) return;
     const line = document.createElement("div");
     line.className = "cabinet-card-link";
+    line.dataset.cabinetCardLinkId = cabinet.id;
     if (cabinet.id === state.selectedCabinetId) line.classList.add("is-selected");
     line.style.left = `${cabinet.x}px`;
     line.style.top = `${cabinet.y}px`;
@@ -1377,6 +1385,161 @@
     state.cabinets.forEach(appendCabinetCard);
     state.cabinets.forEach(appendCabinetCardLink);
     renderCameraLabels();
+  }
+
+  function printContentBounds(scale, cardMetrics) {
+    const bounds = {
+      minX: 0,
+      minY: 0,
+      maxX: state.imageWidth * scale,
+      maxY: state.imageHeight * scale,
+    };
+    cardMetrics.forEach(({ cabinet, width, height }) => {
+      const card = getCabinetCard(cabinet);
+      const left = card.x * scale;
+      const top = card.y * scale;
+      bounds.minX = Math.min(bounds.minX, left);
+      bounds.minY = Math.min(bounds.minY, top);
+      bounds.maxX = Math.max(bounds.maxX, left + width * state.elementScale);
+      bounds.maxY = Math.max(bounds.maxY, top + height * state.elementScale);
+    });
+    return {
+      ...bounds,
+      width: bounds.maxX - bounds.minX,
+      height: bounds.maxY - bounds.minY,
+    };
+  }
+
+  function renderPrintCameraLabels(layer, scale, offsetX, offsetY, width, height) {
+    if (!state.showLabels) return;
+    const records = state.cameras.map((camera) => {
+      const anchorX = offsetX + camera.x * scale;
+      const anchorY = offsetY + camera.y * scale;
+      if (anchorX < -40 || anchorY < -40 || anchorX > width + 40 || anchorY > height + 40) return null;
+      const label = document.createElement("span");
+      label.className = "camera-name-label";
+      label.textContent = camera.name || "Камера без названия";
+      layer.append(label);
+      return { label, anchorX, anchorY };
+    }).filter(Boolean);
+    const positions = AppMath.placeLabels(records.map(({ label, anchorX, anchorY }) => ({
+      anchorX,
+      anchorY,
+      width: label.offsetWidth,
+      height: label.offsetHeight,
+      radius: Math.max(8, 14 * scale * state.elementScale),
+    })), width, height);
+    records.forEach(({ label }, index) => {
+      const position = positions[index];
+      label.hidden = position.hidden;
+      if (position.hidden) return;
+      label.style.left = `${Math.round(position.x)}px`;
+      label.style.top = `${Math.round(position.y)}px`;
+    });
+  }
+
+  function updatePrintCardLinks(printScene, scale) {
+    state.cabinets.forEach((cabinet) => {
+      const cardState = getCabinetCard(cabinet);
+      if (!cardState.open) return;
+      const cardElement = printScene.querySelector(`[data-cabinet-card-id="${cabinet.id}"]`);
+      const line = printScene.querySelector(`[data-cabinet-card-link-id="${cabinet.id}"]`);
+      if (!cardElement || !line) return;
+      const cardBounds = {
+        x: cardState.x,
+        y: cardState.y,
+        width: cardElement.offsetWidth * state.elementScale / scale,
+        height: cardElement.offsetHeight * state.elementScale / scale,
+      };
+      const end = AppMath.closestPointOnRect(cabinet, cardBounds);
+      const dx = end.x - cabinet.x;
+      const dy = end.y - cabinet.y;
+      line.style.left = `${cabinet.x}px`;
+      line.style.top = `${cabinet.y}px`;
+      line.style.width = `${Math.hypot(dx, dy)}px`;
+      line.style.borderTopWidth = `${1 / scale}px`;
+      line.style.transform = `rotate(${Math.atan2(dy, dx) * 180 / Math.PI}deg)`;
+    });
+  }
+
+  function preparePrintSheet() {
+    if (!state.imageWidth || !state.imageHeight) return false;
+    renderObjects();
+    elements.printTitle.textContent = state.projectName || "Схема размещения камер";
+    elements.printSummary.textContent = `Камер: ${state.cameras.length} · Креплений: ${state.mounts.length} · Шкафов: ${state.cabinets.length} · Кабелей: ${state.cables.length}`;
+    const now = new Date();
+    elements.printDate.dateTime = now.toISOString();
+    elements.printDate.textContent = new Intl.DateTimeFormat("ru-RU", { dateStyle: "long" }).format(now);
+    elements.printDiagram.replaceChildren();
+    document.body.classList.add("is-preparing-print");
+
+    const diagramWidth = elements.printDiagram.clientWidth;
+    const diagramHeight = elements.printDiagram.clientHeight;
+    const cardMetrics = state.cabinets
+      .filter((cabinet) => getCabinetCard(cabinet).open)
+      .map((cabinet) => {
+        const element = elements.objectsLayer.querySelector(`[data-cabinet-card-id="${cabinet.id}"]`);
+        return element ? { cabinet, width: element.offsetWidth, height: element.offsetHeight } : null;
+      })
+      .filter(Boolean);
+
+    let printScale = Math.min(diagramWidth / state.imageWidth, diagramHeight / state.imageHeight);
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const bounds = printContentBounds(printScale, cardMetrics);
+      const reduction = Math.min(1, diagramWidth / bounds.width, diagramHeight / bounds.height);
+      if (reduction >= 0.999) break;
+      printScale = Math.max(0.01, printScale * reduction * 0.995);
+    }
+    const bounds = printContentBounds(printScale, cardMetrics);
+    const offsetX = (diagramWidth - bounds.width) / 2 - bounds.minX;
+    const offsetY = (diagramHeight - bounds.height) / 2 - bounds.minY;
+
+    const previousView = state.view;
+    state.view = { ...state.view, scale: printScale };
+    renderView();
+    renderObjects();
+    const printScene = elements.scene.cloneNode(true);
+    state.view = previousView;
+    renderView();
+    renderObjects();
+
+    printScene.hidden = false;
+    printScene.classList.add("print-scene");
+    printScene.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${printScale})`;
+    printScene.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));
+    printScene.querySelectorAll(".is-selected, .is-snap-target, .is-editing").forEach((node) => {
+      node.classList.remove("is-selected", "is-snap-target", "is-editing");
+    });
+
+    const printLabels = document.createElement("div");
+    printLabels.className = "print-camera-labels";
+    elements.printDiagram.append(printScene, printLabels);
+    updatePrintCardLinks(printScene, printScale);
+    renderPrintCameraLabels(printLabels, printScale, offsetX, offsetY, diagramWidth, diagramHeight);
+    document.body.classList.remove("is-preparing-print");
+
+    if (state.titleBeforePrint === null) state.titleBeforePrint = document.title;
+    document.title = `${state.projectName || "Схема камер"} — схема`;
+    return true;
+  }
+
+  function finishPrint() {
+    document.body.classList.remove("is-preparing-print");
+    elements.printDiagram.replaceChildren();
+    if (state.titleBeforePrint !== null) {
+      document.title = state.titleBeforePrint;
+      state.titleBeforePrint = null;
+    }
+  }
+
+  function saveAsPdf() {
+    if (!preparePrintSheet()) return;
+    window.print();
+  }
+
+  function ensurePrintSheet() {
+    if (!elements.printDiagram.childElementCount) preparePrintSheet();
+    if (state.imageWidth) document.title = `${state.projectName || "Схема камер"} — схема`;
   }
 
   function makeListCamera(camera, index) {
@@ -2015,6 +2178,7 @@
     elements.cabinetTool.disabled = !enabled;
     elements.cableTool.disabled = !enabled;
     elements.toggleLabelsButton.disabled = !enabled;
+    elements.savePdfButton.disabled = !enabled;
     elements.saveProjectButton.disabled = !enabled;
   }
 
@@ -2492,6 +2656,7 @@
     state.showLabels = !state.showLabels;
     renderObjects();
   });
+  elements.savePdfButton.addEventListener("click", saveAsPdf);
   elements.propertiesPopover.addEventListener("pointerdown", (event) => event.stopPropagation());
   elements.propertiesPopover.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
   elements.propertiesPopover.addEventListener("click", (event) => {
@@ -3078,6 +3243,8 @@
     event.preventDefault();
     event.returnValue = "";
   });
+  window.addEventListener("beforeprint", ensurePrintSheet);
+  window.addEventListener("afterprint", finishPrint);
   window.addEventListener("pagehide", releaseImageUrl);
 
   markProjectClean();
