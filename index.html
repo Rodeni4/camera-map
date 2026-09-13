@@ -45,6 +45,10 @@
             title="Повторить (Ctrl+Y)" aria-label="Повторить отменённое действие" data-tooltip="Повторить · Ctrl+Y">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 7.25 5 4.75-5 4.75M19 12h-8.25A5.75 5.75 0 0 0 5 17.75"/></svg>
           </button>
+          <button id="toggle-labels" class="button toolbar-icon-button" type="button" disabled
+            title="Показать названия камер" aria-label="Показать названия камер" aria-pressed="false" data-tooltip="Показать названия камер">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.75 12s3.5-5.5 9.25-5.5 9.25 5.5 9.25 5.5-3.5 5.5-9.25 5.5S2.75 12 2.75 12Z"/><circle cx="12" cy="12" r="2.5"/></svg>
+          </button>
           <label class="button button--primary toolbar-icon-button" for="map-file"
             title="Загрузить карту" aria-label="Загрузить карту" data-tooltip="Загрузить карту">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.25 4.25h15.5v15.5H4.25V4.25Zm0 11.5 4-4 3 3 2-2 6.5 6.5M15.75 7.75v4m-2-2h4"/></svg>
@@ -265,6 +269,7 @@
               <img id="map-image" class="map-layer" alt="Загруженная карта" draggable="false">
               <div id="objects-layer" class="objects-layer"></div>
             </div>
+            <div id="camera-labels-layer" class="camera-labels-layer" aria-hidden="true" hidden></div>
           </div>
         </section>
       </div>

@@ -76,6 +76,24 @@ assert.equal(ViewMath.cableStrokeWidth(10), 3);
 assert.equal(ViewMath.cableHitWidth(1), 12);
 assert.equal(ViewMath.cableHitWidth(2), 6);
 
+const crowdedLabels = ViewMath.placeLabels(
+  Array.from({ length: 8 }, () => ({ anchorX: 200, anchorY: 150, width: 72, height: 15, radius: 14 })),
+  400,
+  300,
+);
+assert.equal(crowdedLabels.some((label) => label.hidden), false);
+crowdedLabels.forEach((label, index) => {
+  crowdedLabels.slice(index + 1).forEach((other) => {
+    const overlap = !(
+      label.x + label.width + 3 <= other.x ||
+      other.x + other.width + 3 <= label.x ||
+      label.y + label.height + 3 <= other.y ||
+      other.y + other.height + 3 <= label.y
+    );
+    assert.equal(overlap, false);
+  });
+});
+
 const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
 const requiredIds = [
   "project-status",
@@ -85,6 +103,8 @@ const requiredIds = [
   "save-project",
   "undo-action",
   "redo-action",
+  "toggle-labels",
+  "camera-labels-layer",
   "properties-popover",
   "camera-tool",
   "element-scale",

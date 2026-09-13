@@ -78,6 +78,58 @@
       };
     },
 
+    placeLabels(items, width, height, gap = 3, margin = 4) {
+      const placed = [];
+      const overlaps = (candidate) => placed.some((item) => !(
+        candidate.x + candidate.width + gap <= item.x ||
+        item.x + item.width + gap <= candidate.x ||
+        candidate.y + candidate.height + gap <= item.y ||
+        item.y + item.height + gap <= candidate.y
+      ));
+      const fits = (candidate) => (
+        candidate.x >= margin && candidate.y >= margin &&
+        candidate.x + candidate.width <= width - margin &&
+        candidate.y + candidate.height <= height - margin
+      );
+
+      return items.map((item) => {
+        const candidates = [];
+        const base = item.radius + 4;
+        const rings = Math.max(6, items.length + 2);
+        for (let ring = 0; ring < rings; ring += 1) {
+          const vertical = ring * (item.height + gap);
+          const sideShift = Math.ceil(ring / 2) * (item.height + gap) * (ring % 2 ? 1 : -1);
+          candidates.push(
+            { x: item.anchorX - item.width / 2, y: item.anchorY + base + vertical },
+            { x: item.anchorX - item.width / 2, y: item.anchorY - base - item.height - vertical },
+            { x: item.anchorX + base, y: item.anchorY - item.height / 2 + sideShift },
+            { x: item.anchorX - base - item.width, y: item.anchorY - item.height / 2 + sideShift },
+          );
+        }
+
+        let position = candidates.find((candidate) => fits({ ...candidate, width: item.width, height: item.height }) &&
+          !overlaps({ ...candidate, width: item.width, height: item.height }));
+        if (!position) {
+          const stepX = Math.max(36, item.width + gap);
+          const stepY = item.height + gap;
+          for (let y = margin; !position && y + item.height <= height - margin; y += stepY) {
+            for (let x = margin; x + item.width <= width - margin; x += stepX) {
+              const candidate = { x, y, width: item.width, height: item.height };
+              if (!overlaps(candidate)) {
+                position = { x, y };
+                break;
+              }
+            }
+          }
+        }
+
+        if (!position) return { hidden: true, x: 0, y: 0 };
+        const result = { ...position, width: item.width, height: item.height, hidden: false };
+        placed.push(result);
+        return result;
+      });
+    },
+
     cableLaneOffset(index, count, viewScale, gap = 5) {
       return (index - (count - 1) / 2) * gap / viewScale;
     },
@@ -102,6 +154,7 @@
     saveProjectButton: document.querySelector("#save-project"),
     undoButton: document.querySelector("#undo-action"),
     redoButton: document.querySelector("#redo-action"),
+    toggleLabelsButton: document.querySelector("#toggle-labels"),
     projectStatus: document.querySelector("#project-status"),
     fitButton: document.querySelector("#fit-button"),
     workspace: document.querySelector("#workspace"),
@@ -114,6 +167,7 @@
     scene: document.querySelector("#scene"),
     mapImage: document.querySelector("#map-image"),
     objectsLayer: document.querySelector("#objects-layer"),
+    cameraLabelsLayer: document.querySelector("#camera-labels-layer"),
     status: document.querySelector("#status"),
     zoomStatus: document.querySelector("#zoom-status"),
     elementScaleInput: document.querySelector("#element-scale"),
@@ -189,6 +243,7 @@
     view: { x: 0, y: 0, scale: 1 },
     fitScale: 1,
     elementScale: 1,
+    showLabels: false,
     fitted: false,
     workspaceSize: { width: 0, height: 0 },
     dragging: false,
@@ -318,6 +373,7 @@
       },
       settings: {
         elementScale: state.elementScale,
+        showLabels: state.showLabels,
       },
       counters: {
         nextCameraId: state.nextCameraId,
@@ -438,6 +494,7 @@
     setActiveTool(null);
     const restored = cloneHistorySnapshot(snapshot);
     state.elementScale = restored.settings.elementScale;
+    state.showLabels = Boolean(restored.settings.showLabels);
     Object.assign(state, restored.counters);
     state.cameras = restored.cameras;
     state.mounts = restored.mounts;
@@ -621,6 +678,7 @@
     elements.objectsLayer.style.setProperty("--card-scale", String(state.elementScale / scale));
     elements.objectsLayer.style.setProperty("--tooltip-scale", String(1 / (scale * state.elementScale)));
     elements.zoomStatus.textContent = `Масштаб: ${Math.round(scale * 100)}%`;
+    renderCameraLabels();
   }
 
   function fitMap() {
@@ -1257,8 +1315,54 @@
     elements.objectsLayer.append(object);
   }
 
+  function syncObjectLabels() {
+    const action = state.showLabels ? "Скрыть названия камер" : "Показать названия камер";
+    elements.toggleLabelsButton.setAttribute("aria-pressed", String(state.showLabels));
+    elements.toggleLabelsButton.title = action;
+    elements.toggleLabelsButton.setAttribute("aria-label", action);
+    elements.toggleLabelsButton.dataset.tooltip = action;
+  }
+
+  function renderCameraLabels() {
+    elements.cameraLabelsLayer.replaceChildren();
+    elements.cameraLabelsLayer.hidden = !state.showLabels || !state.imageWidth;
+    if (elements.cameraLabelsLayer.hidden) return;
+
+    const width = elements.workspace.clientWidth;
+    const height = elements.workspace.clientHeight;
+    const records = state.cameras.map((camera) => {
+      const anchorX = state.view.x + camera.x * state.view.scale;
+      const anchorY = state.view.y + camera.y * state.view.scale;
+      if (anchorX < -40 || anchorY < -40 || anchorX > width + 40 || anchorY > height + 40) return null;
+      const label = document.createElement("span");
+      label.className = "camera-name-label";
+      if (camera.id === state.selectedCameraId) label.classList.add("is-selected");
+      label.dataset.cameraLabelId = camera.id;
+      label.textContent = camera.name || "Камера без названия";
+      elements.cameraLabelsLayer.append(label);
+      return { camera, label, anchorX, anchorY };
+    }).filter(Boolean);
+
+    const items = records.map(({ label, anchorX, anchorY }) => ({
+      anchorX,
+      anchorY,
+      width: label.offsetWidth,
+      height: label.offsetHeight,
+      radius: Math.max(10, 14 * state.view.scale * state.elementScale),
+    }));
+    const positions = AppMath.placeLabels(items, width, height);
+    records.forEach(({ label }, index) => {
+      const position = positions[index];
+      label.hidden = position.hidden;
+      if (position.hidden) return;
+      label.style.left = `${Math.round(position.x)}px`;
+      label.style.top = `${Math.round(position.y)}px`;
+    });
+  }
+
   function renderObjects() {
     hideCableBundlePicker();
+    syncObjectLabels();
     elements.objectsLayer.replaceChildren();
     appendCables();
 
@@ -1272,6 +1376,7 @@
     state.cabinets.forEach(appendCabinet);
     state.cabinets.forEach(appendCabinetCard);
     state.cabinets.forEach(appendCabinetCardLink);
+    renderCameraLabels();
   }
 
   function makeListCamera(camera, index) {
@@ -1909,6 +2014,7 @@
     elements.mountTool.disabled = !enabled;
     elements.cabinetTool.disabled = !enabled;
     elements.cableTool.disabled = !enabled;
+    elements.toggleLabelsButton.disabled = !enabled;
     elements.saveProjectButton.disabled = !enabled;
   }
 
@@ -2084,6 +2190,7 @@
       },
       settings: {
         elementScale: clamp(finiteNumber(project.settings?.elementScale, 1), 0.5, 3),
+        showLabels: Boolean(project.settings?.showLabels),
       },
       counters: {
         nextCameraId: normalizedCounter(counters.nextCameraId, nextNumericId(cameras, "c")),
@@ -2120,6 +2227,7 @@
     state.view = { x: 0, y: 0, scale: 1 };
     state.fitScale = 1;
     state.elementScale = 1;
+    state.showLabels = false;
     state.fitted = false;
     state.cameras = [];
     state.mounts = [];
@@ -2185,6 +2293,7 @@
       state.imageWidth = project.map.width;
       state.imageHeight = project.map.height;
       state.elementScale = project.settings.elementScale;
+      state.showLabels = project.settings.showLabels;
       state.cameras = project.cameras;
       state.mounts = project.mounts;
       state.cabinets = project.cabinets;
@@ -2379,6 +2488,10 @@
   elements.saveProjectButton.addEventListener("click", saveProject);
   elements.undoButton.addEventListener("click", undo);
   elements.redoButton.addEventListener("click", redo);
+  elements.toggleLabelsButton.addEventListener("click", () => {
+    state.showLabels = !state.showLabels;
+    renderObjects();
+  });
   elements.propertiesPopover.addEventListener("pointerdown", (event) => event.stopPropagation());
   elements.propertiesPopover.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
   elements.propertiesPopover.addEventListener("click", (event) => {
