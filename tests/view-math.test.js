@@ -70,13 +70,22 @@ assert.deepEqual(lanesAtHalfZoom, [-10, 0, 10]);
 assert.deepEqual(lanesAtDoubleZoom, [-2.5, 0, 2.5]);
 assert.equal((lanesAtHalfZoom[1] - lanesAtHalfZoom[0]) * 0.5, 5);
 assert.equal((lanesAtDoubleZoom[1] - lanesAtDoubleZoom[0]) * 2, 5);
+assert.equal(ViewMath.cableStrokeWidth(1), 1.25);
+assert.equal(ViewMath.cableStrokeWidth(2), 3);
+assert.equal(ViewMath.cableStrokeWidth(10), 3);
+assert.equal(ViewMath.cableHitWidth(1), 12);
+assert.equal(ViewMath.cableHitWidth(2), 6);
 
 const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
 const requiredIds = [
   "project-status",
   "new-project",
+  "open-project",
   "project-file",
   "save-project",
+  "undo-action",
+  "redo-action",
+  "properties-popover",
   "camera-tool",
   "element-scale",
   "element-scale-value",
@@ -101,6 +110,12 @@ const requiredIds = [
   "close-properties",
   "mount-properties",
   "mount-name",
+  "mounted-camera-count",
+  "mounted-camera-list",
+  "mount-connections",
+  "mounted-cable-group",
+  "mounted-cable-count",
+  "mounted-cable-list",
   "add-mounted-camera",
   "mount-camera-menu",
   "add-new-mounted-camera",

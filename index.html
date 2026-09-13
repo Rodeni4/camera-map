@@ -27,15 +27,23 @@
             title="Новый проект" aria-label="Новый проект" data-tooltip="Новый проект">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2.75h8.2L19.25 7.8V21.25H6a1.25 1.25 0 0 1-1.25-1.25V4A1.25 1.25 0 0 1 6 2.75Zm7.25 1.5V8.75h4.5M12 11v6m-3-3h6"/></svg>
           </button>
-          <label class="button toolbar-icon-button" for="project-file"
+          <button id="open-project" class="button toolbar-icon-button" type="button"
             title="Открыть проект" aria-label="Открыть проект" data-tooltip="Открыть проект">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.75 19.25 6.4 9.75h13.85l-2.65 9.5H3.75Zm1-9.5V5.5h5l1.6 2h7.9v2.25"/></svg>
-          </label>
+          </button>
           <input id="project-file" class="visually-hidden" type="file"
             accept=".cmap,.json,application/json">
           <button id="save-project" class="button toolbar-icon-button" type="button" disabled
             title="Сохранить проект" aria-label="Сохранить проект" data-tooltip="Сохранить проект">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.25 3.75h13.5l2 2v14.5H4.25V3.75Zm3 0v6h9v-6M7.5 20.25v-7h9v7"/></svg>
+          </button>
+          <button id="undo-action" class="button toolbar-icon-button" type="button" disabled
+            title="Отменить (Ctrl+Z)" aria-label="Отменить последнее действие" data-tooltip="Отменить · Ctrl+Z">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 7.25-5 4.75 5 4.75M5 12h8.25a5.75 5.75 0 0 1 5.75 5.75"/></svg>
+          </button>
+          <button id="redo-action" class="button toolbar-icon-button" type="button" disabled
+            title="Повторить (Ctrl+Y)" aria-label="Повторить отменённое действие" data-tooltip="Повторить · Ctrl+Y">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 7.25 5 4.75-5 4.75M19 12h-8.25A5.75 5.75 0 0 0 5 17.75"/></svg>
           </button>
           <label class="button button--primary toolbar-icon-button" for="map-file"
             title="Загрузить карту" aria-label="Загрузить карту" data-tooltip="Загрузить карту">
@@ -81,7 +89,7 @@
               <span class="element-tool__icon element-tool__icon--cabinet" aria-hidden="true">▦</span>
               <span>
                 <strong>Шкаф</strong>
-                <small>Конечная точка кабеля</small>
+                <small>Добавить на карту</small>
               </span>
             </button>
             <button id="cable-tool" class="element-tool" type="button" aria-pressed="false" disabled>
@@ -103,7 +111,7 @@
           <section id="camera-properties" class="sidebar__section properties" hidden>
             <div class="properties__heading">
               <h2>Камера</h2>
-              <button id="delete-camera" class="icon-button" type="button" title="Удалить камеру" aria-label="Удалить камеру">×</button>
+              <button class="icon-button properties__close" type="button" title="Закрыть свойства" aria-label="Закрыть свойства" data-close-properties>×</button>
             </div>
             <label class="field">
               <span>Название</span>
@@ -148,7 +156,10 @@
               <button id="detach-camera" type="button">Отвязать</button>
             </div>
             <p class="properties__hint">Перетащите камеру для перемещения. Синий маркер меняет длину обзора, оранжевый — направление.</p>
-            <button id="close-properties" class="button button--primary properties__done" type="button">ОК</button>
+            <div class="properties__actions">
+              <button id="close-properties" class="button button--primary properties__done" type="button">ОК</button>
+              <button id="delete-camera" class="button properties__delete" type="button">Удалить камеру</button>
+            </div>
           </section>
 
           <section id="mount-properties" class="sidebar__section properties" hidden>
@@ -157,7 +168,7 @@
                 <h2 id="mount-properties-title">Крепление</h2>
                 <small id="mount-properties-type" class="properties__type"></small>
               </div>
-              <button id="delete-mount" class="icon-button" type="button" title="Удалить крепление" aria-label="Удалить крепление">×</button>
+              <button class="icon-button properties__close" type="button" title="Закрыть свойства" aria-label="Закрыть свойства" data-close-properties>×</button>
             </div>
             <label class="field">
               <span>Название</span>
@@ -171,14 +182,27 @@
                 <div id="free-camera-list" class="free-camera-list"></div>
               </div>
             </div>
+            <div id="mount-connections" class="mount-connections" hidden>
+              <div id="mounted-cable-group" class="mount-connections__group" hidden>
+                <strong id="mounted-cable-count">Кабели</strong>
+                <div id="mounted-cable-list" class="mount-connections__list"></div>
+              </div>
+              <div id="mounted-camera-group" class="mount-connections__group" hidden>
+                <strong id="mounted-camera-count">Камеры</strong>
+                <div id="mounted-camera-list" class="mount-connections__list"></div>
+              </div>
+            </div>
             <p class="properties__hint">Камеры сохраняют своё расположение и перемещаются вместе с креплением.</p>
-            <button id="close-mount-properties" class="button button--primary properties__done" type="button">ОК</button>
+            <div class="properties__actions">
+              <button id="close-mount-properties" class="button button--primary properties__done" type="button">ОК</button>
+              <button id="delete-mount" class="button properties__delete" type="button">Удалить крепление</button>
+            </div>
           </section>
 
           <section id="cabinet-properties" class="sidebar__section properties" hidden>
             <div class="properties__heading">
               <h2>Шкаф</h2>
-              <button id="delete-cabinet" class="icon-button" type="button" title="Удалить шкаф" aria-label="Удалить шкаф">×</button>
+              <button class="icon-button properties__close" type="button" title="Закрыть свойства" aria-label="Закрыть свойства" data-close-properties>×</button>
             </div>
             <label class="field">
               <span>Название</span>
@@ -186,13 +210,16 @@
             </label>
             <button id="open-cabinet-card" class="button cabinet-card-open" type="button">Открыть карточку</button>
             <p class="properties__hint">Шкаф служит конечной точкой витой пары и оптического кабеля.</p>
-            <button id="close-cabinet-properties" class="button button--primary properties__done" type="button">ОК</button>
+            <div class="properties__actions">
+              <button id="close-cabinet-properties" class="button button--primary properties__done" type="button">ОК</button>
+              <button id="delete-cabinet" class="button properties__delete" type="button">Удалить шкаф</button>
+            </div>
           </section>
 
           <section id="cable-properties" class="sidebar__section properties" hidden>
             <div class="properties__heading">
               <h2>Кабель</h2>
-              <button id="delete-cable" class="icon-button" type="button" title="Удалить кабель" aria-label="Удалить кабель">×</button>
+              <button class="icon-button properties__close" type="button" title="Закрыть свойства" aria-label="Закрыть свойства" data-close-properties>×</button>
             </div>
             <label class="field">
               <span>Название</span>
@@ -203,7 +230,10 @@
               <span>Начало</span><strong id="cable-source"></strong>
               <span>Конец</span><strong id="cable-target"></strong>
             </div>
-            <button id="close-cable-properties" class="button button--primary properties__done" type="button">ОК</button>
+            <div class="properties__actions">
+              <button id="close-cable-properties" class="button button--primary properties__done" type="button">ОК</button>
+              <button id="delete-cable" class="button properties__delete" type="button">Удалить кабель</button>
+            </div>
           </section>
         </aside>
 
@@ -215,6 +245,7 @@
               <p class="empty-state__hint">Выберите изображение PNG или JPG</p>
             </div>
             <div id="placement-hint" class="placement-hint" hidden>Щёлкните по карте, чтобы поставить камеру</div>
+            <div id="properties-popover" class="properties-popover"></div>
             <div id="cable-type-picker" class="cable-type-picker" role="dialog" aria-labelledby="cable-type-picker-title" hidden>
               <strong id="cable-type-picker-title">Кабель между шкафами</strong>
               <span>Выберите тип линии</span>

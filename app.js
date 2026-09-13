@@ -81,6 +81,14 @@
     cableLaneOffset(index, count, viewScale, gap = 5) {
       return (index - (count - 1) / 2) * gap / viewScale;
     },
+
+    cableStrokeWidth(count, thin = 1.25, thick = 3) {
+      return count > 1 ? thick : thin;
+    },
+
+    cableHitWidth(typeCount, single = 12, adjacent = 6) {
+      return typeCount > 1 ? adjacent : single;
+    },
   };
 
   if (typeof module !== "undefined" && module.exports) module.exports = AppMath;
@@ -90,7 +98,10 @@
     fileInput: document.querySelector("#map-file"),
     projectFileInput: document.querySelector("#project-file"),
     newProjectButton: document.querySelector("#new-project"),
+    openProjectButton: document.querySelector("#open-project"),
     saveProjectButton: document.querySelector("#save-project"),
+    undoButton: document.querySelector("#undo-action"),
+    redoButton: document.querySelector("#redo-action"),
     projectStatus: document.querySelector("#project-status"),
     fitButton: document.querySelector("#fit-button"),
     workspace: document.querySelector("#workspace"),
@@ -132,6 +143,13 @@
     mountPropertiesTitle: document.querySelector("#mount-properties-title"),
     mountPropertiesType: document.querySelector("#mount-properties-type"),
     mountNameInput: document.querySelector("#mount-name"),
+    mountConnections: document.querySelector("#mount-connections"),
+    mountedCableGroup: document.querySelector("#mounted-cable-group"),
+    mountedCableCount: document.querySelector("#mounted-cable-count"),
+    mountedCableList: document.querySelector("#mounted-cable-list"),
+    mountedCameraGroup: document.querySelector("#mounted-camera-group"),
+    mountedCameraCount: document.querySelector("#mounted-camera-count"),
+    mountedCameraList: document.querySelector("#mounted-camera-list"),
     addMountedCamera: document.querySelector("#add-mounted-camera"),
     mountCameraMenu: document.querySelector("#mount-camera-menu"),
     addNewMountedCamera: document.querySelector("#add-new-mounted-camera"),
@@ -150,7 +168,15 @@
     cableTarget: document.querySelector("#cable-target"),
     deleteCable: document.querySelector("#delete-cable"),
     closeCableProperties: document.querySelector("#close-cable-properties"),
+    propertiesPopover: document.querySelector("#properties-popover"),
   };
+
+  elements.propertiesPopover.append(
+    elements.cameraProperties,
+    elements.mountProperties,
+    elements.cabinetProperties,
+    elements.cableProperties,
+  );
 
   const state = {
     imageUrl: null,
@@ -195,13 +221,27 @@
     lastCardResizePointerDown: null,
     projectName: "Новый проект",
     projectFileName: null,
+    projectFileHandle: null,
     cleanFingerprint: "",
     isDirty: false,
+    undoStack: [],
+    redoStack: [],
+    historySnapshot: null,
+    historyCoalesceKey: null,
+    applyingHistory: false,
   };
 
   const SVG_NS = "http://www.w3.org/2000/svg";
   const PROJECT_FORMAT = "camera-map-project";
   const PROJECT_VERSION = 1;
+  const HISTORY_LIMIT = 100;
+  const PROJECT_FILE_PICKER_OPTIONS = {
+    types: [{
+      description: "Проект Camera Map",
+      accept: { "application/json": [".cmap"] },
+    }],
+    excludeAcceptAllOption: true,
+  };
   const MIN_CAMERA_RANGE_PERCENT = 5;
   const DEFAULT_CAMERA_RANGE_PERCENT = 20;
   const ROTATION_HANDLE_GAP = 32;
@@ -323,6 +363,120 @@
     updateProjectStatus();
   }
 
+  function captureHistorySnapshot() {
+    const content = projectContent(false);
+    return {
+      settings: content.settings,
+      counters: content.counters,
+      cameras: content.cameras,
+      mounts: content.mounts,
+      cabinets: content.cabinets,
+      cables: content.cables,
+    };
+  }
+
+  function cloneHistorySnapshot(snapshot) {
+    return JSON.parse(JSON.stringify(snapshot));
+  }
+
+  function historyFingerprint(snapshot) {
+    return JSON.stringify(snapshot);
+  }
+
+  function updateHistoryButtons() {
+    elements.undoButton.disabled = state.undoStack.length === 0;
+    elements.redoButton.disabled = state.redoStack.length === 0;
+  }
+
+  function resetHistory() {
+    state.undoStack = [];
+    state.redoStack = [];
+    state.historySnapshot = captureHistorySnapshot();
+    state.historyCoalesceKey = null;
+    updateHistoryButtons();
+  }
+
+  function historyInputKey(target) {
+    if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) return null;
+    if (target.id) return `input:${target.id}`;
+    const equipment = target.closest("[data-equipment-id]");
+    const field = target.closest("[class*='cabinet-equipment-field--']")?.className || target.tagName;
+    return equipment ? `equipment:${equipment.dataset.equipmentId}:${field}` : `input:${field}`;
+  }
+
+  function recordHistory(coalesceKey = null) {
+    if (state.applyingHistory) return;
+    const next = captureHistorySnapshot();
+    if (!state.historySnapshot) {
+      state.historySnapshot = next;
+      state.historyCoalesceKey = coalesceKey;
+      updateHistoryButtons();
+      return;
+    }
+    if (historyFingerprint(next) === historyFingerprint(state.historySnapshot)) {
+      if (!coalesceKey) state.historyCoalesceKey = null;
+      return;
+    }
+    if (!coalesceKey || state.historyCoalesceKey !== coalesceKey) {
+      state.undoStack.push(state.historySnapshot);
+      if (state.undoStack.length > HISTORY_LIMIT) state.undoStack.shift();
+    }
+    state.historySnapshot = next;
+    state.historyCoalesceKey = coalesceKey;
+    state.redoStack = [];
+    updateHistoryButtons();
+  }
+
+  function applyHistorySnapshot(snapshot) {
+    state.applyingHistory = true;
+    const selected = {
+      cameraId: state.selectedCameraId,
+      mountId: state.selectedMountId,
+      cabinetId: state.selectedCabinetId,
+      cableId: state.selectedCableId,
+    };
+    setActiveTool(null);
+    const restored = cloneHistorySnapshot(snapshot);
+    state.elementScale = restored.settings.elementScale;
+    Object.assign(state, restored.counters);
+    state.cameras = restored.cameras;
+    state.mounts = restored.mounts;
+    state.cabinets = restored.cabinets;
+    state.cables = restored.cables;
+    state.selectedCameraId = state.cameras.some((item) => item.id === selected.cameraId) ? selected.cameraId : null;
+    state.selectedMountId = state.mounts.some((item) => item.id === selected.mountId) ? selected.mountId : null;
+    state.selectedCabinetId = state.cabinets.some((item) => item.id === selected.cabinetId) ? selected.cabinetId : null;
+    state.selectedCableId = state.cables.some((item) => item.id === selected.cableId) ? selected.cableId : null;
+    state.objectInteraction = null;
+    state.snapTargetId = null;
+    state.lastCabinetPointerDown = null;
+    state.lastCardResizePointerDown = null;
+    elements.elementScaleInput.value = String(Math.round(state.elementScale * 100));
+    elements.elementScaleValue.value = `${Math.round(state.elementScale * 100)}%`;
+    renderView();
+    refreshEditor();
+    state.applyingHistory = false;
+    state.historySnapshot = captureHistorySnapshot();
+    state.historyCoalesceKey = null;
+    refreshDirtyState();
+    updateHistoryButtons();
+  }
+
+  function undo() {
+    if (!state.undoStack.length) return;
+    state.redoStack.push(captureHistorySnapshot());
+    const previous = state.undoStack.pop();
+    applyHistorySnapshot(previous);
+  }
+
+  function redo() {
+    if (!state.redoStack.length) return;
+    state.undoStack.push(captureHistorySnapshot());
+    if (state.undoStack.length > HISTORY_LIMIT) state.undoStack.shift();
+    const next = state.redoStack.pop();
+    applyHistorySnapshot(next);
+  }
+
   function getCamera(id) {
     return state.cameras.find((camera) => camera.id === id) || null;
   }
@@ -360,6 +514,14 @@
     if (last === 1 && lastTwo !== 11) return `${count} устройство`;
     if (last >= 2 && last <= 4 && (lastTwo < 12 || lastTwo > 14)) return `${count} устройства`;
     return `${count} устройств`;
+  }
+
+  function cameraCountText(count) {
+    const lastTwo = count % 100;
+    const last = count % 10;
+    if (last === 1 && lastTwo !== 11) return `${count} камера`;
+    if (last >= 2 && last <= 4 && (lastTwo < 12 || lastTwo > 14)) return `${count} камеры`;
+    return `${count} камер`;
   }
 
   function addEquipment(cabinet, typeId) {
@@ -402,6 +564,15 @@
     card.open = true;
     card.collapsed = false;
     selectCabinet(cabinet.id);
+  }
+
+  function closeCabinetCard(cabinet) {
+    const card = getCabinetCard(cabinet);
+    card.open = false;
+    card.addMenuOpen = false;
+    card.editingEquipmentId = null;
+    renderObjects();
+    syncProperties();
   }
 
   function getCable(id) {
@@ -513,47 +684,143 @@
     return type === "copper" ? "Витая пара уличная" : "Оптоволокно";
   }
 
-  function buildCableLanes() {
-    const groups = new Map();
+  function buildCableBundles() {
+    const segments = new Map();
     state.cables.forEach((cable) => {
       const nodes = cableRouteNodes(cable);
       for (let index = 0; index < nodes.length - 1; index += 1) {
-        const pair = [nodes[index].key, nodes[index + 1].key].sort();
-        const key = pair.join("|");
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push(cable.id);
+        const first = nodes[index];
+        const second = nodes[index + 1];
+        const [start, end] = first.key < second.key ? [first, second] : [second, first];
+        const key = `${start.key}|${end.key}`;
+        if (!segments.has(key)) segments.set(key, { key, start, end, types: new Map() });
+        const segment = segments.get(key);
+        if (!segment.types.has(cable.type)) segment.types.set(cable.type, []);
+        const cableIds = segment.types.get(cable.type);
+        if (!cableIds.includes(cable.id)) cableIds.push(cable.id);
       }
     });
-    groups.forEach((ids) => ids.sort());
-    return groups;
+
+    const typeOrder = ["copper", "fiber"];
+    const bundles = [];
+    segments.forEach((segment) => {
+      const presentTypes = typeOrder.filter((type) => segment.types.has(type));
+      presentTypes.forEach((type, index) => {
+        bundles.push({
+          ...segment,
+          type,
+          cableIds: segment.types.get(type),
+          typeCount: presentTypes.length,
+          laneOffset: AppMath.cableLaneOffset(index, presentTypes.length, state.view.scale, 6),
+        });
+      });
+    });
+    return bundles;
   }
 
-  function appendCableSegment(svg, cable, start, end, laneIds) {
+  function cableBundlePath(bundle) {
+    const { start, end, laneOffset } = bundle;
     const distance = Math.hypot(end.x - start.x, end.y - start.y);
-    if (!distance) return;
-    const laneOffset = AppMath.cableLaneOffset(
-      laneIds.indexOf(cable.id),
-      laneIds.length,
-      state.view.scale,
-    );
-    const direction = start.key < end.key ? 1 : -1;
-    const offsetX = -(end.y - start.y) / distance * laneOffset * direction;
-    const offsetY = (end.x - start.x) / distance * laneOffset * direction;
-    const pathData = `M ${start.x + offsetX} ${start.y + offsetY} L ${end.x + offsetX} ${end.y + offsetY}`;
+    if (!distance) return "";
+    const offsetX = -(end.y - start.y) / distance * laneOffset;
+    const offsetY = (end.x - start.x) / distance * laneOffset;
+    return `M ${start.x + offsetX} ${start.y + offsetY} L ${end.x + offsetX} ${end.y + offsetY}`;
+  }
 
-    const segmentKey = [start.key, end.key].sort().join("|");
+  function cableCountText(count) {
+    const lastTwo = count % 100;
+    const last = count % 10;
+    if (lastTwo >= 11 && lastTwo <= 14) return `${count} кабелей`;
+    if (last === 1) return `${count} кабель`;
+    if (last >= 2 && last <= 4) return `${count} кабеля`;
+    return `${count} кабелей`;
+  }
+
+  function cableBundleTitle(bundle) {
+    const type = bundle.type === "copper" ? "Витая пара" : "Оптика";
+    const names = bundle.cableIds.map((id) => getCable(id)?.name).filter(Boolean);
+    return `${type} · ${cableCountText(bundle.cableIds.length)}${names.length ? `\n${names.join("\n")}` : ""}`;
+  }
+
+  function appendCableBundleLine(svg, bundle) {
+    const pathData = cableBundlePath(bundle);
+    if (!pathData) return;
     const line = makeSvg("path", {
       d: pathData,
-      "data-cable-id": cable.id,
-      "data-segment-key": segmentKey,
+      "data-segment-key": bundle.key,
+      "data-cable-count": bundle.cableIds.length,
     });
-    line.classList.add("cable-line", `cable-line--${cable.type}`);
-    if (cable.id === state.selectedCableId) line.classList.add("is-selected");
+    line.classList.add("cable-line", `cable-line--${bundle.type}`);
+    if (bundle.cableIds.length > 1) line.classList.add("is-bundle");
+    line.style.setProperty("--cable-width", `${AppMath.cableStrokeWidth(bundle.cableIds.length)}px`);
     svg.append(line);
+  }
 
-    const hit = makeSvg("path", { d: pathData, "data-cable-id": cable.id });
+  function appendSelectedCableLine(svg, bundle) {
+    if (!bundle.cableIds.includes(state.selectedCableId)) return;
+    const pathData = cableBundlePath(bundle);
+    if (!pathData) return;
+    const line = makeSvg("path", { d: pathData, "data-cable-id": state.selectedCableId });
+    line.classList.add("cable-line", "is-selected");
+    svg.append(line);
+  }
+
+  function appendCableBundleHit(svg, bundle) {
+    const pathData = cableBundlePath(bundle);
+    if (!pathData) return;
+    const hit = makeSvg("path", {
+      d: pathData,
+      "data-cable-ids": bundle.cableIds.join(","),
+      "data-cable-type": bundle.type,
+    });
     hit.classList.add("cable-hit");
+    hit.style.setProperty("--cable-hit-width", `${AppMath.cableHitWidth(bundle.typeCount)}px`);
+    const title = makeSvg("title");
+    title.textContent = cableBundleTitle(bundle);
+    hit.append(title);
     svg.append(hit);
+  }
+
+  function hideCableBundlePicker() {
+    elements.workspace.querySelector(".cable-bundle-picker")?.remove();
+  }
+
+  function showCableBundlePicker(cableIds, type, clientX, clientY) {
+    hideCableBundlePicker();
+    const cables = cableIds.map(getCable).filter(Boolean);
+    if (cables.length < 2) {
+      if (cables[0]) selectCable(cables[0].id);
+      return;
+    }
+
+    const picker = document.createElement("div");
+    picker.className = "cable-bundle-picker";
+    picker.setAttribute("role", "dialog");
+    picker.setAttribute("aria-label", "Выбор кабеля");
+    picker.addEventListener("pointerdown", (event) => event.stopPropagation());
+
+    const heading = document.createElement("strong");
+    const typeName = type === "copper" ? "Витая пара" : "Оптика";
+    heading.textContent = `${typeName} · ${cableCountText(cables.length)}`;
+    picker.append(heading);
+
+    cables.forEach((cable) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = cable.name || cableTypeName(cable.type);
+      if (cable.id === state.selectedCableId) button.classList.add("is-selected");
+      button.addEventListener("click", () => selectCable(cable.id));
+      picker.append(button);
+    });
+
+    elements.workspace.append(picker);
+    const workspaceRect = elements.workspace.getBoundingClientRect();
+    const pickerRect = picker.getBoundingClientRect();
+    const left = clamp(clientX - workspaceRect.left + 8, 8, Math.max(8, workspaceRect.width - pickerRect.width - 8));
+    const top = clamp(clientY - workspaceRect.top + 8, 8, Math.max(8, workspaceRect.height - pickerRect.height - 8));
+    picker.style.left = `${left}px`;
+    picker.style.top = `${top}px`;
+    picker.querySelector("button")?.focus();
   }
 
   function appendCables() {
@@ -562,17 +829,10 @@
       preserveAspectRatio: "none",
     });
     svg.classList.add("cables-layer");
-    const lanes = buildCableLanes();
-
-    state.cables.forEach((cable) => {
-      const nodes = cableRouteNodes(cable);
-      for (let index = 0; index < nodes.length - 1; index += 1) {
-        const start = nodes[index];
-        const end = nodes[index + 1];
-        const key = [start.key, end.key].sort().join("|");
-        appendCableSegment(svg, cable, start, end, lanes.get(key) || [cable.id]);
-      }
-    });
+    const bundles = buildCableBundles();
+    bundles.forEach((bundle) => appendCableBundleLine(svg, bundle));
+    bundles.forEach((bundle) => appendSelectedCableLine(svg, bundle));
+    bundles.forEach((bundle) => appendCableBundleHit(svg, bundle));
 
     if (state.cableDraft) {
       const nodes = cableRouteNodes(state.cableDraft);
@@ -915,10 +1175,7 @@
     close.textContent = "×";
     close.title = "Закрыть карточку";
     close.setAttribute("aria-label", "Закрыть карточку");
-    close.addEventListener("click", () => {
-      cardState.open = false;
-      renderObjects();
-    });
+    close.addEventListener("click", () => closeCabinetCard(cabinet));
 
     actions.append(collapse, close);
     header.append(dragMark, title, actions);
@@ -1001,6 +1258,7 @@
   }
 
   function renderObjects() {
+    hideCableBundlePicker();
     elements.objectsLayer.replaceChildren();
     appendCables();
 
@@ -1178,6 +1436,42 @@
     }
   }
 
+  function renderMountConnections(mount) {
+    const attached = state.cameras.filter((camera) => camera.mountId === mount.id);
+    const routed = state.cables.filter((cable) => cable.viaMountIds.includes(mount.id));
+    const hasCameras = attached.length > 0;
+    const hasCables = routed.length > 0;
+
+    elements.mountConnections.hidden = !hasCameras && !hasCables;
+    elements.mountConnections.classList.toggle("has-both", hasCameras && hasCables);
+    elements.mountedCameraGroup.hidden = !hasCameras;
+    elements.mountedCableGroup.hidden = !hasCables;
+    elements.mountedCameraCount.textContent = cameraCountText(attached.length);
+    elements.mountedCableCount.textContent = cableCountText(routed.length);
+    elements.mountedCameraList.replaceChildren();
+    elements.mountedCableList.replaceChildren();
+
+    routed.forEach((cable) => {
+      const link = document.createElement("button");
+      link.type = "button";
+      link.className = `mount-connections__link mount-connections__link--${cable.type}`;
+      link.dataset.mountedCableId = cable.id;
+      link.textContent = cable.name || cableTypeName(cable.type);
+      link.title = `Открыть кабель: ${link.textContent}`;
+      elements.mountedCableList.append(link);
+    });
+
+    attached.forEach((camera) => {
+      const link = document.createElement("button");
+      link.type = "button";
+      link.className = "mount-connections__link mount-connections__link--camera";
+      link.dataset.mountedCameraId = camera.id;
+      link.textContent = camera.name || "Без названия";
+      link.title = `Открыть камеру: ${link.textContent}`;
+      elements.mountedCameraList.append(link);
+    });
+  }
+
   function syncProperties() {
     const camera = getCamera(state.selectedCameraId);
     const mount = getMount(state.selectedMountId);
@@ -1205,9 +1499,16 @@
       elements.mountPropertiesTitle.textContent = mountTypeName(mount.type);
       elements.mountPropertiesType.textContent = mount.type === "pole" ? "Опора для одной или нескольких камер" : "Крепление на здании";
       elements.mountNameInput.value = mount.name;
+      elements.deleteMount.textContent = mount.type === "pole" ? "Удалить столб" : "Удалить точку крепления";
+      renderMountConnections(mount);
     }
 
-    if (cabinet) elements.cabinetNameInput.value = cabinet.name;
+    if (cabinet) {
+      const card = getCabinetCard(cabinet);
+      elements.cabinetNameInput.value = cabinet.name;
+      elements.openCabinetCard.textContent = card.open ? "Закрыть карточку" : "Открыть карточку";
+      elements.openCabinetCard.setAttribute("aria-expanded", String(card.open));
+    }
 
     if (cable) {
       elements.cableNameInput.value = cable.name;
@@ -1289,7 +1590,7 @@
 
   function revealProperties(panel) {
     window.requestAnimationFrame(() => {
-      panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      panel.scrollTop = 0;
     });
   }
 
@@ -1841,6 +2142,7 @@
     state.snapTargetId = null;
     state.projectName = "Новый проект";
     state.projectFileName = null;
+    state.projectFileHandle = null;
     setActiveTool(null);
     clearError();
     elements.mapImage.removeAttribute("src");
@@ -1853,10 +2155,11 @@
     elements.elementScaleValue.value = "100%";
     setMapControlsEnabled(false);
     refreshEditor();
+    resetHistory();
     markProjectClean();
   }
 
-  async function openProject(file) {
+  async function openProject(file, fileHandle = null) {
     clearError();
     if (!file) return;
     try {
@@ -1893,16 +2196,18 @@
       state.selectedCableId = null;
       state.objectInteraction = null;
       state.snapTargetId = null;
-      state.projectName = project.name || fileNameWithoutExtension(file.name) || "Проект камер";
+      state.projectName = fileNameWithoutExtension(file.name) || project.name || "Проект камер";
       state.projectFileName = /\.cmap$/i.test(file.name)
         ? file.name
         : safeProjectFileName(fileNameWithoutExtension(file.name));
+      state.projectFileHandle = fileHandle;
       setActiveTool(null);
       elements.elementScaleInput.value = String(Math.round(state.elementScale * 100));
       elements.elementScaleValue.value = `${Math.round(state.elementScale * 100)}%`;
       showLoadedMap();
       refreshEditor();
       fitMap();
+      resetHistory();
       markProjectClean();
     } catch (error) {
       const detail = error instanceof SyntaxError
@@ -1914,20 +2219,23 @@
     }
   }
 
-  function saveProject() {
+  async function chooseProjectFile() {
     clearError();
-    if (!state.imageData || !state.imageWidth) {
-      showError("Сначала загрузите карту, затем сохраните проект.");
+    if (typeof window.showOpenFilePicker !== "function") {
+      elements.projectFileInput.click();
       return;
     }
-    const fileName = state.projectFileName || safeProjectFileName(state.projectName);
-    const payload = {
-      format: PROJECT_FORMAT,
-      version: PROJECT_VERSION,
-      savedAt: new Date().toISOString(),
-      project: projectContent(true),
-    };
-    const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
+    try {
+      const [fileHandle] = await window.showOpenFilePicker(PROJECT_FILE_PICKER_OPTIONS);
+      if (!fileHandle) return;
+      await openProject(await fileHandle.getFile(), fileHandle);
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+      showError("Не удалось открыть файл проекта. Проверьте доступ к выбранному файлу.");
+    }
+  }
+
+  function downloadProjectBlob(blob, fileName) {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -1936,8 +2244,15 @@
     link.click();
     link.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    state.projectFileName = fileName;
-    markProjectClean();
+  }
+
+  async function writeProjectFile(fileHandle, blob) {
+    const writable = await fileHandle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+  }
+
+  function showSaveSuccess() {
     elements.saveProjectButton.classList.add("is-saved");
     elements.saveProjectButton.title = "Проект сохранён";
     elements.saveProjectButton.setAttribute("aria-label", "Проект сохранён");
@@ -1948,6 +2263,44 @@
       elements.saveProjectButton.setAttribute("aria-label", "Сохранить проект");
       elements.saveProjectButton.dataset.tooltip = "Сохранить проект";
     }, 1400);
+  }
+
+  async function saveProject() {
+    clearError();
+    if (!state.imageData || !state.imageWidth) {
+      showError("Сначала загрузите карту, затем сохраните проект.");
+      return;
+    }
+    try {
+      let fileHandle = state.projectFileHandle;
+      if (!fileHandle && typeof window.showSaveFilePicker === "function") {
+        fileHandle = await window.showSaveFilePicker({
+          ...PROJECT_FILE_PICKER_OPTIONS,
+          suggestedName: state.projectFileName || safeProjectFileName(state.projectName),
+        });
+        if (!fileHandle) return;
+        state.projectName = fileNameWithoutExtension(fileHandle.name) || state.projectName;
+      }
+
+      const fileName = fileHandle?.name || state.projectFileName || safeProjectFileName(state.projectName);
+      const payload = {
+        format: PROJECT_FORMAT,
+        version: PROJECT_VERSION,
+        savedAt: new Date().toISOString(),
+        project: projectContent(true),
+      };
+      const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
+      if (fileHandle) await writeProjectFile(fileHandle, blob);
+      else downloadProjectBlob(blob, fileName);
+
+      state.projectFileHandle = fileHandle || null;
+      state.projectFileName = fileName;
+      markProjectClean();
+      showSaveSuccess();
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+      showError("Не удалось сохранить проект. Проверьте доступ к выбранному файлу и попробуйте снова.");
+    }
   }
 
   async function loadMap(file) {
@@ -1993,6 +2346,7 @@
       renderObjects();
       renderObjectList();
       fitMap();
+      resetHistory();
       refreshDirtyState();
     } catch (error) {
       let detail = "Не удалось прочитать выбранный файл. Проверьте доступ к нему и попробуйте снова.";
@@ -2021,7 +2375,29 @@
   elements.newProjectButton.addEventListener("click", () => {
     if (confirmDiscardChanges("Создать новый проект?")) resetProject();
   });
+  elements.openProjectButton.addEventListener("click", chooseProjectFile);
   elements.saveProjectButton.addEventListener("click", saveProject);
+  elements.undoButton.addEventListener("click", undo);
+  elements.redoButton.addEventListener("click", redo);
+  elements.propertiesPopover.addEventListener("pointerdown", (event) => event.stopPropagation());
+  elements.propertiesPopover.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
+  elements.propertiesPopover.addEventListener("click", (event) => {
+    if (event.target.closest("[data-close-properties]")) {
+      clearSelection();
+      return;
+    }
+    const cableButton = event.target.closest("[data-mounted-cable-id]");
+    const mountedCable = getCable(cableButton?.dataset.mountedCableId);
+    if (cableButton && mountedCable) {
+      selectCable(mountedCable.id);
+      return;
+    }
+    const cameraButton = event.target.closest("[data-mounted-camera-id]");
+    const camera = getCamera(cameraButton?.dataset.mountedCameraId);
+    if (!cameraButton || !camera) return;
+    selectCamera(camera.id);
+    ensurePointVisible(camera);
+  });
   elements.fitButton.addEventListener("click", fitMap);
   elements.elementScaleInput.addEventListener("input", (event) => {
     state.elementScale = Number(event.target.value) / 100;
@@ -2114,6 +2490,10 @@
 
   elements.deleteCamera.addEventListener("click", () => {
     const cameraId = state.selectedCameraId;
+    const camera = getCamera(cameraId);
+    if (!camera) return;
+    const linkedCableCount = state.cables.filter((cable) => cable.sourceKind === "camera" && cable.sourceId === cameraId).length;
+    if (linkedCableCount && !window.confirm(`Удалить «${camera.name}»?\n\nВместе с камерой будут удалены связанные кабели.`)) return;
     state.cameras = state.cameras.filter((camera) => camera.id !== cameraId);
     state.cables = state.cables.filter((cable) => !(cable.sourceKind === "camera" && cable.sourceId === cameraId));
     state.selectedCameraId = null;
@@ -2151,6 +2531,13 @@
   });
   elements.deleteMount.addEventListener("click", () => {
     const mountId = state.selectedMountId;
+    const mount = getMount(mountId);
+    if (!mount) return;
+    const attachedCount = state.cameras.filter((camera) => camera.mountId === mountId).length;
+    const routedCableCount = state.cables.filter((cable) => cable.viaMountIds.includes(mountId)).length;
+    if ((attachedCount || routedCableCount) && !window.confirm(
+      `Удалить «${mount.name}»?\n\nКамеры будут отвязаны, а точка будет убрана из маршрутов кабелей.`,
+    )) return;
     state.cameras.forEach((camera) => {
       if (camera.mountId === mountId) camera.mountId = null;
     });
@@ -2172,10 +2559,19 @@
   });
   elements.openCabinetCard.addEventListener("click", () => {
     const cabinet = getCabinet(state.selectedCabinetId);
-    if (cabinet) openCabinetCard(cabinet);
+    if (!cabinet) return;
+    if (getCabinetCard(cabinet).open) closeCabinetCard(cabinet);
+    else openCabinetCard(cabinet);
   });
   elements.deleteCabinet.addEventListener("click", () => {
     const cabinetId = state.selectedCabinetId;
+    const cabinet = getCabinet(cabinetId);
+    if (!cabinet) return;
+    const connectedCableCount = state.cables.filter((cable) =>
+      cable.targetCabinetId === cabinetId || (cable.sourceKind === "cabinet" && cable.sourceId === cabinetId)).length;
+    if ((connectedCableCount || cabinetEquipment(cabinet).length) && !window.confirm(
+      `Удалить «${cabinet.name}»?\n\nБудут также удалены его оборудование и связанные кабели.`,
+    )) return;
     state.cabinets = state.cabinets.filter((cabinet) => cabinet.id !== cabinetId);
     state.cables = state.cables.filter((cable) =>
       cable.targetCabinetId !== cabinetId && !(cable.sourceKind === "cabinet" && cable.sourceId === cabinetId));
@@ -2199,6 +2595,7 @@
 
   elements.objectsLayer.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
+    hideCableBundlePicker();
     const cabinetCard = event.target.closest(".cabinet-card");
     if (cabinetCard) {
       event.stopPropagation();
@@ -2273,7 +2670,9 @@
     setActiveTool(null);
 
     if (cableHit) {
-      selectCable(cableHit.dataset.cableId);
+      const cableIds = cableHit.dataset.cableIds.split(",").filter(Boolean);
+      if (cableIds.length === 1) selectCable(cableIds[0]);
+      else showCableBundlePicker(cableIds, cableHit.dataset.cableType, event.clientX, event.clientY);
       return;
     }
 
@@ -2457,6 +2856,7 @@
   }, { passive: false });
 
   elements.workspace.addEventListener("pointerdown", (event) => {
+    hideCableBundlePicker();
     if (!state.imageWidth || event.button !== 0) return;
     if (state.activeTool) {
       event.preventDefault();
@@ -2496,7 +2896,22 @@
   elements.workspace.addEventListener("pointercancel", finishDrag);
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && state.activeTool) setActiveTool(null);
+    const modifier = event.ctrlKey || event.metaKey;
+    if (modifier && !event.altKey && event.key.toLowerCase() === "z") {
+      event.preventDefault();
+      if (event.shiftKey) redo();
+      else undo();
+      return;
+    }
+    if (modifier && !event.altKey && event.key.toLowerCase() === "y") {
+      event.preventDefault();
+      redo();
+      return;
+    }
+    if (event.key === "Escape") {
+      hideCableBundlePicker();
+      if (state.activeTool) setActiveTool(null);
+    }
     if (event.key === "Delete" && !event.target.matches("input")) {
       if (state.selectedCameraId) elements.deleteCamera.click();
       else if (state.selectedMountId) elements.deleteMount.click();
@@ -2523,11 +2938,26 @@
 
   resizeObserver.observe(elements.workspace);
 
-  document.addEventListener("input", refreshDirtyState);
-  document.addEventListener("change", () => window.queueMicrotask(refreshDirtyState));
-  document.addEventListener("click", () => window.queueMicrotask(refreshDirtyState));
-  window.addEventListener("pointerup", () => window.queueMicrotask(refreshDirtyState));
-  window.addEventListener("pointercancel", () => window.queueMicrotask(refreshDirtyState));
+  document.addEventListener("input", (event) => {
+    refreshDirtyState();
+    recordHistory(historyInputKey(event.target));
+  });
+  document.addEventListener("change", () => window.queueMicrotask(() => {
+    refreshDirtyState();
+    recordHistory();
+  }));
+  document.addEventListener("click", () => window.queueMicrotask(() => {
+    refreshDirtyState();
+    recordHistory();
+  }));
+  window.addEventListener("pointerup", () => window.queueMicrotask(() => {
+    refreshDirtyState();
+    recordHistory();
+  }));
+  window.addEventListener("pointercancel", () => window.queueMicrotask(() => {
+    refreshDirtyState();
+    recordHistory();
+  }));
 
   window.addEventListener("beforeunload", (event) => {
     refreshDirtyState();
@@ -2538,4 +2968,5 @@
   window.addEventListener("pagehide", releaseImageUrl);
 
   markProjectClean();
+  resetHistory();
 })();
