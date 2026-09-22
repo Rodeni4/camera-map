@@ -119,6 +119,11 @@
           <section id="camera-properties" class="sidebar__section properties" hidden>
             <div class="properties__heading">
               <h2>Камера</h2>
+              <label class="camera-active-toggle">
+                <span>Активна</span>
+                <input id="camera-active" type="checkbox" role="switch" checked>
+                <span class="camera-active-toggle__track" aria-hidden="true"></span>
+              </label>
               <button class="icon-button properties__close" type="button" title="Закрыть свойства" aria-label="Закрыть свойства" data-close-properties>×</button>
             </div>
             <label class="field">
@@ -272,8 +277,8 @@
             <div id="scene" class="scene" hidden>
               <img id="map-image" class="map-layer" alt="Загруженная карта" draggable="false">
               <div id="objects-layer" class="objects-layer"></div>
+              <div id="camera-labels-layer" class="camera-labels-layer" aria-hidden="true" hidden></div>
             </div>
-            <div id="camera-labels-layer" class="camera-labels-layer" aria-hidden="true" hidden></div>
           </div>
         </section>
       </div>

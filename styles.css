@@ -381,6 +381,50 @@ button, input, textarea { font: inherit; }
 
 .properties__heading h2 { margin: 0; }
 
+.camera-active-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+  color: #596579;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.camera-active-toggle input {
+  position: absolute;
+  right: 0;
+  width: 32px;
+  height: 18px;
+  margin: 0;
+  opacity: 0;
+}
+
+.camera-active-toggle__track {
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+  background: #6b7280;
+}
+
+.camera-active-toggle__track::before {
+  content: "";
+  display: block;
+  width: 14px;
+  height: 14px;
+  margin: 2px;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.camera-active-toggle input:checked + .camera-active-toggle__track { background: #16a34a; }
+.camera-active-toggle input:checked + .camera-active-toggle__track::before { transform: translateX(14px); }
+.camera-active-toggle input:focus-visible + .camera-active-toggle__track {
+  outline: 2px solid #16a34a;
+  outline-offset: 3px;
+}
+
 .properties__type {
   display: block;
   margin-top: 2px;
@@ -961,6 +1005,11 @@ button, input, textarea { font: inherit; }
   stroke: rgb(220 38 38 / 68%);
 }
 
+.camera-object.is-inactive .camera-sector__fill {
+  fill: rgb(107 114 128 / 5%);
+  stroke: rgb(107 114 128 / 25%);
+}
+
 .camera-ui {
   position: absolute;
   z-index: 2;
@@ -974,6 +1023,7 @@ button, input, textarea { font: inherit; }
 }
 
 .camera-control {
+  --camera-color: #16a34a;
   position: absolute;
   z-index: 2;
   top: 0;
@@ -986,7 +1036,7 @@ button, input, textarea { font: inherit; }
   border: 0;
   border-radius: 50%;
   color: #fff;
-  background: #2f68ff;
+  background: var(--camera-color);
   box-shadow: 0 1px 4px rgb(16 30 54 / 30%);
   transform: translate(-50%, -50%);
   pointer-events: auto;
@@ -999,15 +1049,17 @@ button, input, textarea { font: inherit; }
 }
 
 .camera-control:hover, .camera-control:focus-visible {
-  background: #174fdc;
+  background: var(--camera-color);
   outline: none;
   box-shadow: 0 1px 4px rgb(16 30 54 / 38%);
 }
 
 .camera-object.is-selected .camera-control {
-  background: var(--selection-color);
+  background: var(--camera-color);
   box-shadow: 0 0 0 4px rgb(220 38 38 / 24%), 0 2px 6px rgb(16 30 54 / 35%);
 }
+
+.camera-object.is-inactive .camera-control { --camera-color: #6b7280; }
 
 .camera-tooltip {
   position: absolute;
@@ -1040,7 +1092,8 @@ button, input, textarea { font: inherit; }
 
 .camera-labels-layer {
   position: absolute;
-  z-index: 8;
+  z-index: 6;
+  transform-origin: 0 0;
   inset: 0;
   overflow: hidden;
   pointer-events: none;
@@ -1745,7 +1798,8 @@ body.is-preparing-print .print-sheet {
 
 .print-camera-labels {
   position: absolute;
-  z-index: 8;
+  z-index: 6;
+  transform-origin: 0 0;
   inset: 0;
   overflow: hidden;
   pointer-events: none;

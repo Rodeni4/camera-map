@@ -181,6 +181,7 @@
     cableTool: document.querySelector("#cable-tool"),
     objectList: document.querySelector("#object-list"),
     cameraProperties: document.querySelector("#camera-properties"),
+    activeInput: document.querySelector("#camera-active"),
     nameInput: document.querySelector("#camera-name"),
     modelInput: document.querySelector("#camera-model"),
     ipInput: document.querySelector("#camera-ip"),
@@ -271,6 +272,7 @@
     selectedCameraId: null,
     selectedMountId: null,
     selectedCabinetId: null,
+    showCabinetProperties: true,
     selectedCableId: null,
     activeTool: null,
     cameraMountId: null,
@@ -915,6 +917,7 @@
   function appendCamera(camera) {
     const object = document.createElement("div");
     object.className = "camera-object";
+    object.classList.toggle("is-inactive", camera.active === false);
     if (camera.id === state.selectedCameraId) object.classList.add("is-selected");
     object.style.left = `${camera.x}px`;
     object.style.top = `${camera.y}px`;
@@ -1338,6 +1341,10 @@
 
     const width = elements.workspace.clientWidth;
     const height = elements.workspace.clientHeight;
+    // Keep label placement in screen pixels within the scene's stacking context.
+    elements.cameraLabelsLayer.style.width = `${width}px`;
+    elements.cameraLabelsLayer.style.height = `${height}px`;
+    elements.cameraLabelsLayer.style.transform = `scale(${1 / state.view.scale}) translate(${-state.view.x}px, ${-state.view.y}px)`;
     const records = state.cameras.map((camera) => {
       const anchorX = state.view.x + camera.x * state.view.scale;
       const anchorY = state.view.y + camera.y * state.view.scale;
@@ -1499,6 +1506,7 @@
     renderView();
     renderObjects();
     const printScene = elements.scene.cloneNode(true);
+    printScene.querySelector(".camera-labels-layer")?.remove();
     state.view = previousView;
     renderView();
     renderObjects();
@@ -1513,7 +1521,11 @@
 
     const printLabels = document.createElement("div");
     printLabels.className = "print-camera-labels";
-    elements.printDiagram.append(printScene, printLabels);
+    printLabels.style.width = `${diagramWidth}px`;
+    printLabels.style.height = `${diagramHeight}px`;
+    printLabels.style.transform = `scale(${1 / printScale}) translate(${-offsetX}px, ${-offsetY}px)`;
+    printScene.append(printLabels);
+    elements.printDiagram.append(printScene);
     updatePrintCardLinks(printScene, printScale);
     renderPrintCameraLabels(printLabels, printScale, offsetX, offsetY, diagramWidth, diagramHeight);
     document.body.classList.remove("is-preparing-print");
@@ -1747,10 +1759,11 @@
     const cable = getCable(state.selectedCableId);
     elements.cameraProperties.hidden = !camera;
     elements.mountProperties.hidden = !mount;
-    elements.cabinetProperties.hidden = !cabinet;
+    elements.cabinetProperties.hidden = !cabinet || !state.showCabinetProperties;
     elements.cableProperties.hidden = !cable;
 
     if (camera) {
+      elements.activeInput.checked = camera.active !== false;
       elements.nameInput.value = camera.name;
       elements.modelInput.value = camera.model;
       elements.ipInput.value = camera.ip;
@@ -1810,8 +1823,9 @@
     refreshEditor();
   }
 
-  function selectCabinet(id) {
+  function selectCabinet(id, showProperties = true) {
     hideMountCameraMenu();
+    state.showCabinetProperties = showProperties;
     state.selectedCabinetId = id;
     state.selectedCameraId = null;
     state.selectedMountId = null;
@@ -1953,6 +1967,7 @@
     const rangeBase = Math.max(1, Math.min(state.imageWidth, state.imageHeight));
     const camera = {
       id: `c${number}`,
+      active: true,
       x: point.x,
       y: point.y,
       direction: 0,
@@ -2269,6 +2284,7 @@
 
     const cameras = projectArray(project.cameras, "камеры").map((item) => ({
       id: validId(item?.id, "камеры"),
+      active: item?.active !== false,
       x: clamp(finiteNumber(item?.x), 0, width),
       y: clamp(finiteNumber(item?.y), 0, height),
       direction: ((finiteNumber(item?.direction) % 360) + 360) % 360,
@@ -2715,6 +2731,7 @@
   elements.cancelCableType.addEventListener("click", () => setActiveTool(null));
 
   elements.nameInput.addEventListener("input", (event) => updateCamera("name", event.target.value));
+  elements.activeInput.addEventListener("change", (event) => updateCamera("active", event.target.checked));
   elements.modelInput.addEventListener("input", (event) => updateCamera("model", event.target.value));
   elements.ipInput.addEventListener("input", (event) => updateCamera("ip", event.target.value));
   elements.macInput.addEventListener("input", (event) => updateCamera("mac", event.target.value));
@@ -2894,7 +2911,7 @@
         };
         if (isDoubleClick) {
           card.width = CABINET_CARD_WIDTH;
-          selectCabinet(cabinet.id);
+          selectCabinet(cabinet.id, false);
           return;
         }
         const interaction = {
@@ -2903,7 +2920,7 @@
           startClientX: event.clientX,
           startWidth: card.width,
         };
-        selectCabinet(cabinet.id);
+        selectCabinet(cabinet.id, false);
         state.objectInteraction = interaction;
         return;
       }
@@ -2923,7 +2940,7 @@
         startX: card.x,
         startY: card.y,
       };
-      selectCabinet(cabinet.id);
+      selectCabinet(cabinet.id, false);
       state.objectInteraction = interaction;
       return;
     }
