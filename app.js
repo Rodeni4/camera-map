@@ -240,6 +240,8 @@
   );
 
   const state = {
+    activeWorkspace: "map",
+    openCabinetTabs: [],
     imageUrl: null,
     imageData: null,
     imageToken: 0,
@@ -355,6 +357,11 @@
     return {
       id: cabinet.id,
       name: cabinet.name,
+      note: cabinet.note || "",
+      modelImage: cabinet.modelImage || "",
+      locationImage: cabinet.locationImage || "",
+      internalConnections: validInternalConnections(cabinet, state.cables),
+      schemeLayout: normalizeSchemeLayout(cabinet.schemeLayout),
       x: cabinet.x,
       y: cabinet.y,
       equipment: cabinetEquipment(cabinet).map((item) => ({
@@ -364,7 +371,10 @@
         model: item.model,
         ip: item.ip,
         ports: item.ports,
+        uplinkPorts: item.uplinkPorts ?? (item.type === "poe-switch" ? "2" : "0"),
         note: item.note,
+        modelImage: item.modelImage || "",
+        locationImage: item.locationImage || "",
       })),
       card: serializableCard(cabinet),
     };
@@ -398,7 +408,11 @@
       cameras: state.cameras.map((camera) => ({ ...camera })),
       mounts: state.mounts.map((mount) => ({ ...mount })),
       cabinets: state.cabinets.map(serializableCabinet),
-      cables: state.cables.map((cable) => ({ ...cable, viaMountIds: [...cable.viaMountIds] })),
+      cables: state.cables.map((cable) => ({
+        ...cable, viaMountIds: [...cable.viaMountIds],
+        targetConnection: validPortConnection(cable.targetConnection, getCabinet(cable.targetCabinetId)),
+        sourceConnection: cable.sourceKind === "cabinet" ? validPortConnection(cable.sourceConnection, getCabinet(cable.sourceId)) : null,
+      })),
     };
   }
 
@@ -590,7 +604,7 @@
     return `${count} камер`;
   }
 
-  function addEquipment(cabinet, typeId) {
+  function addEquipment(cabinet, typeId, { render = true } = {}) {
     const type = equipmentType(typeId);
     const equipmentList = cabinetEquipment(cabinet);
     const sameTypeCount = equipmentList.filter((item) => item.type === type.id).length;
@@ -607,7 +621,8 @@
     const card = getCabinetCard(cabinet);
     card.addMenuOpen = false;
     card.editingEquipmentId = equipment.id;
-    renderObjects();
+    if (render) renderObjects();
+    return equipment;
   }
 
   function openCabinetCard(cabinet) {
@@ -691,6 +706,10 @@
   }
 
   function fitMap() {
+    if (state.activeWorkspace !== "map") {
+      state.fitted = true;
+      return;
+    }
     if (!state.imageWidth || !state.imageHeight) return;
     const rect = elements.workspace.getBoundingClientRect();
     state.view = AppMath.fit(rect.width, rect.height, state.imageWidth, state.imageHeight);
@@ -1073,6 +1092,7 @@
       ["Модель", equipment.model],
       ["IP", equipment.ip],
       ["Портов", equipment.ports],
+      ["Uplink", equipmentUplinks(equipment)],
       ["Примечание", equipment.note],
     ];
     values.forEach(([label, value]) => {
@@ -1104,11 +1124,11 @@
         equipment,
       );
     });
-    if (field === "ports") {
+    if (field === "ports" || field === "uplinkPorts") {
       input.addEventListener("change", () => {
         if (input.value === "") return;
-        equipment.ports = String(clamp(Math.round(Number(input.value) || 1), 1, 512));
-        input.value = equipment.ports;
+        equipment[field] = String(clamp(Math.round(Number(input.value) || 0), field === "ports" ? 1 : 0, field === "ports" ? 512 : 32));
+        input.value = equipment[field];
         const item = input.closest(".cabinet-equipment");
         updateEquipmentSummary(
           item.querySelector(".cabinet-equipment__name"),
@@ -1138,6 +1158,8 @@
     const icon = document.createElement("span");
     icon.className = `cabinet-equipment__icon cabinet-equipment__icon--${type.id}`;
     icon.textContent = type.icon;
+    icon.draggable = true;
+    icon.title = "Перетащите, чтобы изменить порядок";
     icon.setAttribute("aria-hidden", "true");
     const heading = document.createElement("span");
     heading.className = "cabinet-equipment__heading";
@@ -1179,6 +1201,7 @@
         makeEquipmentField("Модель", equipment, "model", { placeholder: "Не указана" }),
         makeEquipmentField("IP-адрес", equipment, "ip", { placeholder: "Необязательно", inputMode: "decimal" }),
         makeEquipmentField("Количество портов", equipment, "ports", { type: "number", min: "1", max: "512", placeholder: "Необязательно" }),
+        makeEquipmentField("Uplink-порты", equipment, "uplinkPorts", { type: "number", min: "0", max: "32", placeholder: equipment.type === "poe-switch" ? "2" : "0" }),
         makeEquipmentField("Примечание", equipment, "note", { multiline: true, placeholder: "Необязательно" }),
       );
       const done = document.createElement("button");
@@ -1193,6 +1216,74 @@
       item.append(editor);
     }
     return item;
+  }
+
+  function enableEquipmentReordering(list, cabinet) {
+    let draggedItem = null;
+    let beforeItem = null;
+
+    function clearIndicator() {
+      list.querySelectorAll(".is-drop-before, .is-drop-after").forEach((item) => {
+        item.classList.remove("is-drop-before", "is-drop-after");
+      });
+    }
+
+    function resetDrag() {
+      clearIndicator();
+      draggedItem?.classList.remove("is-dragging");
+      draggedItem = null;
+      beforeItem = null;
+    }
+
+    list.addEventListener("dragstart", (event) => {
+      const icon = event.target.closest(".cabinet-equipment__icon");
+      if (!icon) return;
+      event.stopPropagation();
+      draggedItem = icon.closest(".cabinet-equipment");
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", draggedItem.dataset.equipmentId);
+      event.dataTransfer.setDragImage(draggedItem, 20, 20);
+      draggedItem.classList.add("is-dragging");
+    });
+
+    list.addEventListener("dragover", (event) => {
+      if (!draggedItem) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = "move";
+      const candidates = [...list.children].filter((item) => item !== draggedItem);
+      beforeItem = candidates.find((item) => {
+        const rect = item.getBoundingClientRect();
+        return event.clientY < rect.top + rect.height / 2;
+      }) || null;
+      clearIndicator();
+      if (beforeItem) beforeItem.classList.add("is-drop-before");
+      else candidates.at(-1)?.classList.add("is-drop-after");
+    });
+
+    list.addEventListener("dragleave", (event) => {
+      if (!list.contains(event.relatedTarget)) clearIndicator();
+    });
+
+    list.addEventListener("drop", (event) => {
+      if (!draggedItem) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const equipment = cabinetEquipment(cabinet);
+      const from = equipment.findIndex((item) => item.id === draggedItem.dataset.equipmentId);
+      const beforeId = beforeItem?.dataset.equipmentId;
+      if (from !== -1) {
+        const [moved] = equipment.splice(from, 1);
+        const to = beforeId ? equipment.findIndex((item) => item.id === beforeId) : equipment.length;
+        equipment.splice(to < 0 ? equipment.length : to, 0, moved);
+      }
+      resetDrag();
+      renderObjects();
+      refreshDirtyState();
+      recordHistory();
+    });
+
+    list.addEventListener("dragend", resetDrag);
   }
 
   function appendCabinetCard(cabinet) {
@@ -1288,6 +1379,7 @@
       const list = document.createElement("div");
       list.className = "cabinet-equipment-list";
       equipmentList.forEach((equipment) => list.append(makeEquipmentItem(cabinet, equipment, cardState)));
+      enableEquipmentReordering(list, cabinet);
       body.append(list);
     } else {
       const empty = document.createElement("p");
@@ -1375,7 +1467,665 @@
     });
   }
 
+  const mapTab = document.querySelector("#map-tab");
+  const equipmentTab = document.querySelector("#equipment-tab");
+  const equipmentPanel = document.querySelector("#equipment-panel");
+  const equipmentSearch = document.querySelector("#equipment-search");
+  const equipmentGroups = document.querySelector("#equipment-groups");
+
+  function switchWorkspace(tab) {
+    state.activeWorkspace = tab;
+    setActiveTool(null);
+    const isMap = tab === "map";
+    elements.workspace.hidden = !isMap;
+    equipmentPanel.hidden = tab !== "equipment";
+    document.querySelector("#cabinet-scheme-panel").hidden = !tab.startsWith("cabinet:");
+    document.querySelector(".editor-layout").classList.toggle("is-equipment", !isMap);
+    [mapTab, equipmentTab].forEach((button, index) => {
+      const selected = tab === (index === 0 ? "map" : "equipment");
+      button.setAttribute("aria-selected", String(selected));
+      button.tabIndex = selected ? 0 : -1;
+    });
+    renderCabinetTabs();
+    if (isMap) refreshEditor();
+    else if (tab === "equipment") renderEquipment();
+    else renderCabinetScheme();
+  }
+
+  mapTab.addEventListener("click", () => switchWorkspace("map"));
+  equipmentTab.addEventListener("click", () => switchWorkspace("equipment"));
+  document.querySelector(".workspace-tabs").addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    const tabs = [...document.querySelectorAll('.workspace-tabs [role="tab"]')];
+    const index = tabs.indexOf(event.target);
+    if (index < 0) return;
+    event.preventDefault();
+    const next = event.key === "Home" ? tabs[0] : event.key === "End" ? tabs[tabs.length - 1] : tabs[(index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length];
+    next.click();
+    document.querySelector('.workspace-tabs [aria-selected="true"]')?.focus();
+  });
+  equipmentSearch.addEventListener("input", renderEquipment);
+
+  function openCabinetScheme(id) {
+    if (!getCabinet(id)) return;
+    if (!state.openCabinetTabs.includes(id)) state.openCabinetTabs.push(id);
+    switchWorkspace(`cabinet:${id}`);
+  }
+
+  document.querySelector("#open-cabinet-scheme").addEventListener("click", () => openCabinetScheme(state.selectedCabinetId));
+
+  function renderCabinetTabs() {
+    const tabs = document.querySelector(".workspace-tabs");
+    tabs.querySelectorAll(".cabinet-workspace-tab").forEach((tab) => tab.remove());
+    state.openCabinetTabs.forEach((id) => {
+      const cabinet = getCabinet(id);
+      if (!cabinet) return;
+      const wrapper = document.createElement("div");
+      wrapper.className = "cabinet-workspace-tab";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.id = `cabinet-tab-${id}`;
+      button.setAttribute("role", "tab");
+      button.setAttribute("aria-controls", "cabinet-scheme-panel");
+      const selected = state.activeWorkspace === `cabinet:${id}`;
+      button.setAttribute("aria-selected", String(selected));
+      button.tabIndex = selected ? 0 : -1;
+      button.textContent = cabinet.name || "Шкаф";
+      button.addEventListener("click", () => openCabinetScheme(id));
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "cabinet-workspace-tab__close";
+      close.textContent = "×";
+      close.setAttribute("aria-label", `Закрыть вкладку: ${cabinet.name || "Шкаф"}`);
+      close.addEventListener("click", () => {
+        state.openCabinetTabs = state.openCabinetTabs.filter((item) => item !== id);
+        if (selected) switchWorkspace("map");
+        else renderCabinetTabs();
+        document.querySelector('.workspace-tabs [aria-selected="true"]')?.focus();
+      });
+      wrapper.append(button, close);
+      tabs.append(wrapper);
+    });
+  }
+
+  function reconcileCabinetTabs() {
+    state.openCabinetTabs = state.openCabinetTabs.filter((id) => getCabinet(id));
+    if (state.activeWorkspace.startsWith("cabinet:") && !getCabinet(state.activeWorkspace.slice(8))) {
+      switchWorkspace("map");
+    } else renderCabinetTabs();
+  }
+
+  function cabinetCables(cabinet) {
+    return state.cables.filter((cable) => cable.targetCabinetId === cabinet.id ||
+      (cable.sourceKind === "cabinet" && cable.sourceId === cabinet.id));
+  }
+
+  function connectionKey(cable, cabinet) {
+    return cable.targetCabinetId === cabinet.id ? "targetConnection" : "sourceConnection";
+  }
+
+  function equipmentPorts(item) {
+    return clamp(Math.floor(Number(item.ports) || 0), 0, 512);
+  }
+
+  function validPortConnection(connection, cabinet) {
+    if (!connection || !cabinet) return null;
+    const equipment = cabinetEquipment(cabinet).find((item) => item.id === connection.equipmentId);
+    return equipment && Number.isInteger(connection.port) && connection.port > 0 &&
+      (connection.port <= equipmentPorts(equipment) || (connection.port > 512 && connection.port <= 512 + equipmentUplinks(equipment)))
+      ? { equipmentId: equipment.id, port: connection.port } : null;
+  }
+
+  function cablePortConnection(cable, cabinet) {
+    return validPortConnection(cable[connectionKey(cable, cabinet)], cabinet);
+  }
+
+  function assignCablePort(cable, cabinet, equipmentId, port) {
+    if (!cabinetCables(cabinet).includes(cable)) return "Кабель не относится к этому шкафу.";
+    const key = connectionKey(cable, cabinet);
+    if (!equipmentId) { cable[key] = null; return ""; }
+    const connection = validPortConnection({ equipmentId, port: Number(port) }, cabinet);
+    if (!connection) return "Выберите устройство и доступный порт.";
+    const occupied = cabinetCables(cabinet).some((other) => {
+      const assigned = cablePortConnection(other, cabinet);
+      return other !== cable && assigned?.equipmentId === connection.equipmentId && assigned.port === connection.port;
+    });
+    if (occupied) return "Этот порт уже занят другим кабелем.";
+    if (validInternalConnections(cabinet).some((link) => [link.from, link.to].some((end) => samePort(end, connection)))) return "Этот порт занят внутренним соединением.";
+    cable[key] = connection;
+    return "";
+  }
+
+  function equipmentUplinks(item) {
+    return clamp(Math.floor(Number(item.uplinkPorts ?? (item.type === "poe-switch" ? 2 : 0)) || 0), 0, 32);
+  }
+
+  function samePort(a, b) { return a?.equipmentId === b?.equipmentId && a?.port === b?.port; }
+
+  function validInternalConnections(cabinet, cables = state.cables) {
+    const occupied = new Set();
+    const key = (end) => `${end.equipmentId}:${end.port}`;
+    cables.forEach((cable) => {
+      if (cable.targetCabinetId !== cabinet.id && !(cable.sourceKind === "cabinet" && cable.sourceId === cabinet.id)) return;
+      const end = cablePortConnection(cable, cabinet);
+      if (end) occupied.add(key(end));
+    });
+    return (Array.isArray(cabinet.internalConnections) ? cabinet.internalConnections : []).flatMap((link, index) => {
+      const from = validPortConnection(link?.from, cabinet), to = validPortConnection(link?.to, cabinet);
+      if (!from || !to || from.equipmentId === to.equipmentId || occupied.has(key(from)) || occupied.has(key(to))) return [];
+      occupied.add(key(from)); occupied.add(key(to));
+      return [{ id: typeof link.id === "string" ? link.id.slice(0, 100) : `internal-${index}`, from, to }];
+    });
+  }
+
+  function assignInternalConnection(cabinet, from, to) {
+    from = validPortConnection(from, cabinet); to = validPortConnection(to, cabinet);
+    if (!from || !to) return "Выберите два существующих порта.";
+    if (from.equipmentId === to.equipmentId) return "Выберите порт другого устройства.";
+    const links = validInternalConnections(cabinet);
+    const occupied = (end) => cabinetCables(cabinet).some((cable) => samePort(cablePortConnection(cable, cabinet), end)) ||
+      links.some((link) => samePort(link.from, end) || samePort(link.to, end));
+    if (occupied(from) || occupied(to)) return "Порт уже занят. Сначала удалите существующую связь.";
+    cabinet.internalConnections = [...links, { id: `internal-${Date.now()}-${links.length}`, from, to }];
+    return "";
+  }
+
+  function portLabel(device, port) {
+    return port > 512 ? `Uplink ${port - 512}` : `${device.type === "poe-switch" ? "PoE " : "Порт "}${port}`;
+  }
+
+  let schemeSelection = null;
+  let selectedSchemeWire = null;
+  let schemeMessage = "";
+  const schemeScrollPositions = new Map();
+
+  function resetCabinetSchemeSession() {
+    schemeScrollPositions.clear();
+    schemeSelection = null; selectedSchemeWire = null; schemeMessage = "";
+    state.openCabinetTabs = [];
+    document.querySelector("#cabinet-scheme-panel").replaceChildren();
+    switchWorkspace("map");
+  }
+
+  function normalizeSchemeLayout(raw) {
+    const positions = {};
+    if (raw?.positions && typeof raw.positions === "object") {
+      Object.entries(raw.positions).slice(0, 10000).forEach(([key, point]) => {
+        if (!/^(cable|device):.+$/.test(key) || !Number.isFinite(point?.x) || !Number.isFinite(point?.y)) return;
+        positions[key] = { x: clamp(point.x, 0, 20000), y: clamp(point.y, 0, 20000) };
+      });
+    }
+    return { scale: clamp(Number(raw?.scale) || 1, 0.2, 2.5), positions };
+  }
+
+  function routeSchemeWire(a, b, blocks, lane = 0) {
+    const lead = 32 + lane * 8, padding = 12 + lane * 8;
+    const offset = (point) => ({ x: point.x + (point.direction === "right" ? lead : 0), y: point.y + (point.direction === "right" ? 0 : lead) });
+    const start = offset(a), end = offset(b);
+    const obstacles = blocks.map((block) => ({ left: block.x - padding, right: block.x + block.width + padding, top: block.y - padding, bottom: block.y + block.height + padding }));
+    const xs = [...new Set([start.x, end.x, 4, ...obstacles.flatMap((box) => [Math.max(4, box.left), box.right])])].sort((x, y) => x - y);
+    const ys = [...new Set([start.y, end.y, 4, ...obstacles.flatMap((box) => [Math.max(4, box.top), box.bottom])])].sort((x, y) => x - y);
+    const clear = (p, q) => !obstacles.some((box) => p.x === q.x
+      ? p.x > box.left && p.x < box.right && Math.max(p.y, q.y) > box.top && Math.min(p.y, q.y) < box.bottom
+      : p.y > box.top && p.y < box.bottom && Math.max(p.x, q.x) > box.left && Math.min(p.x, q.x) < box.right);
+    const queue = [{ x: xs.indexOf(start.x), y: ys.indexOf(start.y), direction: "", cost: 0, previous: null }], best = new Map();
+    let found = null;
+    while (queue.length) {
+      queue.sort((p, q) => (q.cost + Math.abs(xs[q.x] - end.x) + Math.abs(ys[q.y] - end.y)) - (p.cost + Math.abs(xs[p.x] - end.x) + Math.abs(ys[p.y] - end.y)));
+      const current = queue.pop(), point = { x: xs[current.x], y: ys[current.y] };
+      const key = `${current.x}:${current.y}:${current.direction}`;
+      if (best.has(key) && best.get(key) < current.cost) continue;
+      if (point.x === end.x && point.y === end.y) { found = current; break; }
+      [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([dx, dy]) => {
+        const x = current.x + dx, y = current.y + dy;
+        if (x < 0 || y < 0 || x >= xs.length || y >= ys.length) return;
+        const next = { x: xs[x], y: ys[y] };
+        if (!clear(point, next)) return;
+        const direction = dx ? "h" : "v";
+        const cost = current.cost + Math.abs(point.x - next.x) + Math.abs(point.y - next.y) + (current.direction && current.direction !== direction ? 24 : 0);
+        const nextKey = `${x}:${y}:${direction}`;
+        if (best.has(nextKey) && best.get(nextKey) <= cost) return;
+        best.set(nextKey, cost); queue.push({ x, y, direction, cost, previous: current });
+      });
+    }
+    const middle = [];
+    for (let point = found; point; point = point.previous) middle.unshift({ x: xs[point.x], y: ys[point.y] });
+    const points = found ? [a, ...middle, b] : [a, start, { x: start.x, y: Math.max(start.y, end.y) + 32 }, { x: end.x, y: Math.max(start.y, end.y) + 32 }, end, b];
+    return points.map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`).join(" ");
+  }
+
+  function renderCabinetScheme() {
+    const cabinet = getCabinet(state.activeWorkspace.slice(8));
+    if (!cabinet) return;
+    if (schemeSelection?.cabinetId !== cabinet.id) schemeSelection = null;
+    if (selectedSchemeWire?.cabinetId !== cabinet.id) selectedSchemeWire = null;
+    const panel = document.querySelector("#cabinet-scheme-panel");
+    const oldScroll = panel.querySelector(".scheme-canvas-scroll");
+    if (oldScroll?.dataset.cabinetId) schemeScrollPositions.set(oldScroll.dataset.cabinetId, { x: oldScroll.scrollLeft || 0, y: oldScroll.scrollTop || 0 });
+    panel.setAttribute("aria-labelledby", `cabinet-tab-${cabinet.id}`);
+    panel.replaceChildren();
+    const node = (tag, text, cls) => { const el = document.createElement(tag); if (text) el.textContent = text; if (cls) el.className = cls; return el; };
+    const button = (text, action, cls = "button") => { const el = node("button", text, cls); el.type = "button"; el.addEventListener("click", action); return el; };
+    const cables = cabinetCables(cabinet), devices = cabinetEquipment(cabinet), links = validInternalConnections(cabinet);
+    const connected = cables.filter((cable) => cablePortConnection(cable, cabinet)).length;
+    const layout = normalizeSchemeLayout(cabinet.schemeLayout);
+    const toolbar = node("div", "", "scheme-visual-toolbar");
+    const status = node("p", schemeMessage || (schemeSelection ? "Выберите второй конец соединения." : `Подключено ${connected}/${cables.length} · Связей ${links.length}`), "scheme-summary");
+    status.setAttribute("role", "status"); toolbar.append(status);
+    const addMenu = node("details", "", "scheme-add-equipment");
+    addMenu.append(node("summary", "+ Добавить оборудование"));
+    const addChoices = node("div", "", "scheme-add-equipment__choices");
+    EQUIPMENT_TYPES.forEach((type) => {
+      const choice = button(`${type.icon} ${type.name}`, () => {
+        const equipment = addEquipment(cabinet, type.id, { render: false });
+        const point = { x: clamp(scroll.scrollLeft / layout.scale + 40, 0, 20000), y: clamp(scroll.scrollTop / layout.scale + 40, 0, 20000) };
+        const width = deviceWidth(equipment);
+        let collision;
+        while ((collision = blocks.find((block) => point.x < block.x + block.width + 16 && point.x + width + 16 > block.x && point.y < block.y + block.height + 16 && point.y + 120 > block.y)) && point.y < 20000) {
+          point.y = Math.min(20000, collision.y + collision.height + 24);
+        }
+        layout.positions[`device:${equipment.id}`] = point;
+        cabinet.schemeLayout = layout;
+        schemeSelection = null; selectedSchemeWire = null; schemeMessage = `Добавлено: ${equipment.name}. Укажите количество портов на блоке.`;
+        scroll.scrollLeft = Math.max(0, (point.x - 24) * layout.scale); scroll.scrollTop = Math.max(0, (point.y - 24) * layout.scale);
+        rememberScroll(); recordHistory(); refreshDirtyState(); renderCabinetScheme();
+        const updatedScroll = panel.querySelector(".scheme-canvas-scroll");
+        if (updatedScroll) {
+          updatedScroll.scrollLeft = Math.max(0, (point.x - 24) * layout.scale);
+          updatedScroll.scrollTop = Math.max(0, (point.y - 24) * layout.scale);
+          schemeScrollPositions.set(cabinet.id, { x: updatedScroll.scrollLeft, y: updatedScroll.scrollTop });
+        }
+      });
+      choice.dataset.equipmentType = type.id;
+      addChoices.append(choice);
+    });
+    addMenu.append(addChoices); toolbar.append(addMenu);
+    const help = node("details", "", "scheme-help");
+    help.append(node("summary", "?"), node("p", "Перетаскивайте блоки за заголовок. Камера → порт или порт → порт создаёт связь. Колесо меняет масштаб, перетаскивание фона перемещает область. Esc отменяет выбор."));
+    if (schemeSelection || selectedSchemeWire) toolbar.append(button("Отменить выбор", () => { schemeSelection = null; selectedSchemeWire = null; schemeMessage = ""; renderCabinetScheme(); }));
+    if (selectedSchemeWire) toolbar.append(button("Удалить выбранную связь", () => {
+      const selected = selectedSchemeWire;
+      if (selected.kind === "cable") {
+        const cable = cables.find((item) => item.id === selected.id);
+        if (cable) cable[connectionKey(cable, cabinet)] = null;
+      } else cabinet.internalConnections = links.filter((link) => link.id !== selected.id);
+      selectedSchemeWire = null; schemeSelection = null; schemeMessage = "Соединение удалено.";
+      recordHistory(); refreshDirtyState(); renderCabinetScheme();
+    }));
+    panel.append(toolbar);
+    const scroll = node("div", "", "scheme-canvas-scroll");
+    scroll.dataset.cabinetId = cabinet.id;
+    const stage = node("div", "", "scheme-canvas-stage");
+    const board = node("div", "", "scheme-canvas");
+    const svg = makeSvg("svg", { class: "scheme-wires", width: 1240, height: 800 });
+    const anchors = new Map(), pinElements = new Map();
+    const blocks = [], wires = [];
+    let suppressClick = false;
+    let boardWidth = 1600, boardHeight = 1000;
+    const zoomLabel = node("output", `${Math.round(layout.scale * 100)}%`, "scheme-zoom-label");
+    function updateExtent() {
+      boardWidth = Math.max(1600, ...blocks.map((block) => block.x + block.width + 400));
+      boardHeight = Math.max(1000, ...blocks.map((block) => block.y + block.height + 400));
+      board.style.width = `${boardWidth}px`; board.style.height = `${boardHeight}px`;
+      svg.setAttribute("width", String(boardWidth)); svg.setAttribute("height", String(boardHeight));
+      board.style.transform = `scale(${layout.scale})`;
+      stage.style.width = `${boardWidth * layout.scale}px`; stage.style.height = `${boardHeight * layout.scale}px`;
+      zoomLabel.textContent = `${Math.round(layout.scale * 100)}%`;
+    }
+    function zoom(scale, x = scroll.clientWidth / 2, y = scroll.clientHeight / 2) {
+      const worldX = (scroll.scrollLeft + x) / layout.scale, worldY = (scroll.scrollTop + y) / layout.scale;
+      layout.scale = clamp(scale, 0.2, 2.5); cabinet.schemeLayout = layout; updateExtent();
+      scroll.scrollLeft = worldX * layout.scale - x; scroll.scrollTop = worldY * layout.scale - y;
+      recordHistory(`scheme-zoom:${cabinet.id}`); refreshDirtyState();
+    }
+    toolbar.append(button("−", () => zoom(layout.scale / 1.2)), zoomLabel, button("+", () => zoom(layout.scale * 1.2)),
+      button("Вписать", () => {
+        if (!blocks.length) { zoom(1); scroll.scrollLeft = 0; scroll.scrollTop = 0; return; }
+        const minX = Math.max(0, Math.min(...blocks.map((block) => block.x - 24), 20000));
+        const minY = Math.max(0, Math.min(...blocks.map((block) => block.y - 24), 20000));
+        const right = Math.max(400, ...blocks.map((block) => block.x + block.width + 24));
+        const bottom = Math.max(300, ...blocks.map((block) => block.y + block.height + 24));
+        zoom(Math.min(scroll.clientWidth / (right - minX), scroll.clientHeight / (bottom - minY)));
+        scroll.scrollLeft = Math.max(0, minX * layout.scale); scroll.scrollTop = Math.max(0, minY * layout.scale);
+      }), button("100%", () => zoom(1)), help);
+    function rememberScroll() { schemeScrollPositions.set(cabinet.id, { x: scroll.scrollLeft, y: scroll.scrollTop }); }
+    scroll.addEventListener("scroll", rememberScroll);
+    scroll.addEventListener("wheel", (event) => {
+      event.preventDefault(); const rect = scroll.getBoundingClientRect();
+      zoom(layout.scale * Math.exp(-event.deltaY * 0.0015), event.clientX - rect.left, event.clientY - rect.top);
+    }, { passive: false });
+    scroll.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || event.target.closest(".scheme-node, .scheme-pin, .scheme-wire, .scheme-uplink-caption")) return;
+      event.preventDefault();
+      const start = { x: event.clientX, y: event.clientY, left: scroll.scrollLeft, top: scroll.scrollTop };
+      scroll.setPointerCapture(event.pointerId); scroll.classList.add("is-panning");
+      const pan = (next) => { if (next.pointerId === event.pointerId) { scroll.scrollLeft = start.left - next.clientX + start.x; scroll.scrollTop = start.top - next.clientY + start.y; } };
+      const finish = (next) => {
+        if (next.pointerId !== event.pointerId) return;
+        scroll.removeEventListener("pointermove", pan); scroll.removeEventListener("pointerup", finish); scroll.removeEventListener("pointercancel", finish);
+        scroll.classList.remove("is-panning");
+        if (scroll.hasPointerCapture(event.pointerId)) scroll.releasePointerCapture(event.pointerId);
+        rememberScroll();
+      };
+      scroll.addEventListener("pointermove", pan); scroll.addEventListener("pointerup", finish); scroll.addEventListener("pointercancel", finish);
+    });
+    function redrawWires() { wires.forEach((item) => item.update()); }
+    function movable(key, card, x, y, width, height, elements, keys) {
+      const block = { key, x, y, width, height }; blocks.push(block);
+      function move(nextX, nextY) {
+        const dx = nextX - block.x, dy = nextY - block.y;
+        elements.forEach((element) => { element.style.left = `${parseFloat(element.style.left) + dx}px`; element.style.top = `${parseFloat(element.style.top) + dy}px`; });
+        keys.forEach((anchor) => { const point = anchors.get(anchor); point.x += dx; point.y += dy; });
+        block.x = nextX; block.y = nextY;
+      }
+      const saved = layout.positions[key]; if (saved) move(saved.x, saved.y);
+      card.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0 || !event.target.closest(".scheme-node > strong")) return;
+        event.preventDefault(); event.stopPropagation();
+        const start = { x: event.clientX, y: event.clientY, left: block.x, top: block.y };
+        let moved = false; card.setPointerCapture(event.pointerId); card.classList.add("is-moving");
+        const drag = (next) => {
+          if (next.pointerId !== event.pointerId) return;
+          if (!moved && Math.hypot(next.clientX - start.x, next.clientY - start.y) < 4) return;
+          moved = true;
+          move(clamp(start.left + (next.clientX - start.x) / layout.scale, 0, 20000), clamp(start.top + (next.clientY - start.y) / layout.scale, 0, 20000));
+          updateExtent(); redrawWires();
+        };
+        const finish = (next) => {
+          if (next.pointerId !== event.pointerId) return;
+          card.removeEventListener("pointermove", drag); card.removeEventListener("pointerup", finish); card.removeEventListener("pointercancel", finish);
+          card.classList.remove("is-moving");
+          if (card.hasPointerCapture(event.pointerId)) card.releasePointerCapture(event.pointerId);
+          if (!moved) return;
+          suppressClick = true; window.setTimeout(() => { suppressClick = false; }, 0);
+          layout.positions[key] = { x: block.x, y: block.y }; cabinet.schemeLayout = layout;
+          recordHistory(); refreshDirtyState(); rememberScroll();
+        };
+        card.addEventListener("pointermove", drag); card.addEventListener("pointerup", finish); card.addEventListener("pointercancel", finish);
+      });
+    }
+    const anchorKey = (end) => end.kind === "cable" ? `cable:${end.cableId}` : `${end.equipmentId}:${end.port}`;
+    function pick(end) {
+      if (suppressClick) return;
+      selectedSchemeWire = null; schemeMessage = "";
+      if (!schemeSelection) { schemeSelection = { ...end, cabinetId: cabinet.id }; renderCabinetScheme(); return; }
+      const first = schemeSelection;
+      if (anchorKey(first) === anchorKey(end)) { schemeSelection = null; renderCabinetScheme(); return; }
+      let error;
+      if (first.kind === "cable" && end.kind === "cable") error = "Выберите порт устройства.";
+      else if (first.kind === "cable" || end.kind === "cable") {
+        const cableEnd = first.kind === "cable" ? first : end, portEnd = first.kind === "cable" ? end : first;
+        const cable = cables.find((item) => item.id === cableEnd.cableId);
+        error = cable ? assignCablePort(cable, cabinet, portEnd.equipmentId, portEnd.port) : "Кабель удалён.";
+      } else error = assignInternalConnection(cabinet, first, end);
+      if (error) { schemeMessage = error; renderCabinetScheme(); return; }
+      schemeSelection = null; recordHistory(); refreshDirtyState(); renderCabinetScheme();
+    }
+    function pin(end, text, x, y, used, socket = false) {
+      const selected = schemeSelection && anchorKey(schemeSelection) === anchorKey(end);
+      const el = button(text, () => pick(end), `scheme-pin${used ? " is-used" : ""}${selected ? " is-selected" : ""}`);
+      el.style.left = `${x}px`; el.style.top = `${y}px`;
+      if (socket) { el.className += " scheme-pin--socket"; el.textContent = end.port > 512 ? `U${end.port - 512}` : String(end.port); }
+      el.title = text;
+      el.setAttribute("aria-pressed", String(Boolean(selected)));
+      el.setAttribute("aria-label", end.kind === "cable" ? text : `${devices.find((item) => item.id === end.equipmentId)?.name || "Устройство"}: ${text}${used ? ", занят" : ", свободен"}`);
+      board.append(el); pinElements.set(anchorKey(end), el);
+      anchors.set(anchorKey(end), socket ? { x: x + 24, y: y + 44, direction: "bottom" } : { x: x + 66, y: y + 14, direction: "right" });
+    }
+    cables.forEach((cable, index) => {
+      const elementStart = board.children.length;
+      const y = 24 + index * 132;
+      const source = cable.targetCabinetId === cabinet.id ? endpointName(cable.sourceKind, cable.sourceId) : endpointName("cabinet", cable.targetCabinetId);
+      const card = node("article", "", "scheme-node scheme-node--external");
+      card.style.left = "20px"; card.style.top = `${y}px`;
+      card.append(node("strong", `${cable.sourceKind === "camera" ? "◉" : "▣"} ${source}`), node("p", cable.name || cableTypeName(cable.type)), node("small", cableTypeName(cable.type)));
+      card.tabIndex = 0; card.setAttribute("role", "button"); card.setAttribute("aria-label", `Подключить: ${source}, ${cable.name}`);
+      card.addEventListener("click", () => pick({ kind: "cable", cableId: cable.id }));
+      card.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); pick({ kind: "cable", cableId: cable.id }); } });
+      board.append(card);
+      pin({ kind: "cable", cableId: cable.id }, "Выход ●", 210, y + 52, Boolean(cablePortConnection(cable, cabinet)));
+      movable(`cable:${cable.id}`, card, 20, y, 260, 108, [...board.children].slice(elementStart), [`cable:${cable.id}`]);
+    });
+    const heights = [24, 24];
+    const deviceWidth = (device) => Math.max(320, 32 + equipmentPorts(device) * 58 + (equipmentUplinks(device) ? 32 + equipmentUplinks(device) * 58 : 0));
+    const columnWidth = Math.max(350, ...devices.map(deviceWidth)) + 100;
+    devices.forEach((device, index) => {
+      const elementStart = board.children.length, oldAnchors = new Set(anchors.keys());
+      const col = index % 2, x = 360 + col * columnWidth, y = heights[col];
+      const main = equipmentPorts(device), uplinks = equipmentUplinks(device);
+      const width = deviceWidth(device), height = 104;
+      heights[col] += height + 40;
+      const card = node("article", "", "scheme-node scheme-node--device"); card.style.left = `${x}px`; card.style.top = `${y}px`; card.style.height = `${height}px`;
+      card.style.width = `${width}px`;
+      const name = node("strong", `${equipmentType(device.type).icon} ${device.name || equipmentType(device.type).name}`);
+      name.title = device.name || equipmentType(device.type).name;
+      const type = node("p", equipmentType(device.type).name);
+      type.title = [equipmentType(device.type).name, device.model].filter(Boolean).join(" · ");
+      card.append(name, type);
+      const config = node("div", "", "scheme-port-config");
+      [["ports", device.type === "poe-switch" ? "PoE" : "Порты", main, 512], ["uplinkPorts", "Uplink", uplinks, 32]].forEach(([field, title, value, max]) => {
+        const label = node("label", `${title} `), input = node("input"); input.type = "number"; input.min = "0"; input.max = String(max); input.value = String(value);
+        input.id = `scheme-${cabinet.id}-${device.id}-${field}`;
+        input.addEventListener("change", () => {
+          device[field] = String(clamp(Math.floor(Number(input.value) || 0), 0, max));
+          cabinet.internalConnections = validInternalConnections(cabinet);
+          cables.forEach((cable) => { cable[connectionKey(cable, cabinet)] = cablePortConnection(cable, cabinet); });
+          schemeSelection = null; recordHistory(); refreshDirtyState(); renderCabinetScheme();
+        });
+        label.append(input); config.append(label);
+      });
+      card.append(config); board.append(card);
+      const used = (port) => cables.some((cable) => samePort(cablePortConnection(cable, cabinet), { equipmentId: device.id, port })) || links.some((link) => [link.from, link.to].some((end) => samePort(end, { equipmentId: device.id, port })));
+      const portCaption = node("span", device.type === "poe-switch" ? "PoE / RJ45" : "Порты", "scheme-uplink-caption"); portCaption.style.left = `${x + 16}px`; portCaption.style.top = `${y + 40}px`; board.append(portCaption);
+      for (let i = 0; i < main; i += 1) pin({ kind: "port", equipmentId: device.id, port: i + 1 }, portLabel(device, i + 1), x + 16 + i * 58, y + 60, used(i + 1), true);
+      if (uplinks) {
+        const caption = node("span", "UPLINK", "scheme-uplink-caption"); caption.style.left = `${x + 48 + main * 58}px`; caption.style.top = `${y + 40}px`; board.append(caption);
+        for (let i = 0; i < uplinks; i += 1) pin({ kind: "port", equipmentId: device.id, port: 513 + i }, portLabel(device, 513 + i), x + 48 + main * 58 + i * 58, y + 60, used(513 + i), true);
+      }
+      movable(`device:${device.id}`, card, x, y, width, height, [...board.children].slice(elementStart), [...anchors.keys()].filter((key) => !oldAnchors.has(key)));
+    });
+    function wire(from, to, kind, id, title) {
+      const a = anchors.get(anchorKey(from)), b = anchors.get(anchorKey(to)); if (!a || !b) return;
+      const lane = wires.length % 8;
+      const route = routeSchemeWire(a, b, blocks, lane);
+      const halo = makeSvg("path", { d: route, class: "scheme-wire-halo" });
+      const path = makeSvg("path", { d: route, class: `scheme-wire${selectedSchemeWire?.kind === kind && selectedSchemeWire?.id === id ? " is-selected" : ""}`, tabindex: "0", role: "button", "aria-label": title });
+      const colors = ["#2563eb", "#0891b2", "#7c3aed", "#d97706", "#059669", "#db2777", "#475569"];
+      const colorIndex = [...`${kind}:${id}`].reduce((sum, character) => sum + character.charCodeAt(0), 0) % colors.length;
+      path.style.setProperty("--wire-color", colors[colorIndex]);
+      const tooltip = makeSvg("title"); tooltip.textContent = title; path.append(tooltip);
+      const select = () => { selectedSchemeWire = { cabinetId: cabinet.id, kind, id }; schemeSelection = null; schemeMessage = title; renderCabinetScheme(); };
+      path.addEventListener("click", select); path.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); select(); } });
+      const endpoints = [pinElements.get(anchorKey(from)), pinElements.get(anchorKey(to))].filter(Boolean);
+      endpoints.forEach((element) => { element.title = title; });
+      const hover = (active) => {
+        wires.forEach((item) => { item.path.style.opacity = active && item.path !== path ? "0.12" : "1"; item.halo.style.opacity = active && item.path !== path ? "0.12" : "1"; });
+        path.classList.toggle("is-traced", active);
+        endpoints.forEach((element) => element.classList.toggle("is-traced", active));
+        if (active) status.textContent = title;
+        else status.textContent = schemeMessage || (schemeSelection ? "Выберите второй конец соединения." : `Подключено ${connected}/${cables.length} · Связей ${links.length}`);
+      };
+      [path, ...endpoints].forEach((element) => {
+        element.addEventListener("pointerenter", () => hover(true)); element.addEventListener("pointerleave", () => hover(false));
+        element.addEventListener("focus", () => hover(true)); element.addEventListener("blur", () => hover(false));
+      });
+      wires.push({ path, halo, update() {
+        const start = anchors.get(anchorKey(from)), end = anchors.get(anchorKey(to));
+        const nextRoute = routeSchemeWire(start, end, blocks, lane);
+        path.setAttribute("d", nextRoute); halo.setAttribute("d", nextRoute);
+      } });
+      svg.append(halo, path);
+    }
+    cables.forEach((cable) => {
+      const end = cablePortConnection(cable, cabinet);
+      const source = cable.targetCabinetId === cabinet.id ? endpointName(cable.sourceKind, cable.sourceId) : endpointName("cabinet", cable.targetCabinetId);
+      if (end) wire({ kind: "cable", cableId: cable.id }, end, "cable", cable.id, `${source} · ${cable.name} → ${devices.find((item) => item.id === end.equipmentId)?.name || "Устройство"}, ${portLabel(devices.find((item) => item.id === end.equipmentId), end.port)}`);
+    });
+    links.forEach((link) => wire(link.from, link.to, "internal", link.id, `${devices.find((item) => item.id === link.from.equipmentId)?.name || "Устройство"} (${portLabel(devices.find((item) => item.id === link.from.equipmentId), link.from.port)}) ↔ ${devices.find((item) => item.id === link.to.equipmentId)?.name || "Устройство"} (${portLabel(devices.find((item) => item.id === link.to.equipmentId), link.to.port)})`));
+    board.append(svg); stage.append(board); scroll.append(stage); panel.append(scroll);
+    updateExtent();
+    const savedScroll = schemeScrollPositions.get(cabinet.id);
+    if (savedScroll) { scroll.scrollLeft = savedScroll.x; scroll.scrollTop = savedScroll.y; }
+    if (!devices.length) panel.append(node("p", "Нажмите «Добавить оборудование», чтобы наполнить шкаф.", "scheme-summary"));
+  }
+
+  function inventoryEntries() {
+    return [
+      ...state.cameras.map((item) => ({ item, type: "Камеры", location: getMount(item.mountId)?.name || "На карте", kind: "camera" })),
+      ...state.mounts.map((item) => ({ item, type: item.type === "pole" ? "Столбы" : "Точки крепления", location: "На карте", kind: "mount" })),
+      ...state.cabinets.flatMap((cabinet) => [
+        { item: cabinet, type: "Шкафы", location: "На карте", kind: "cabinet" },
+        ...cabinetEquipment(cabinet).map((item) => ({ item, type: equipmentType(item.type).name, location: cabinet.name || "Шкаф", kind: "equipment", cabinet })),
+      ]),
+      ...state.cables.map((item) => ({
+        item,
+        type: `Кабели · ${cableTypeName(item.type)}`,
+        location: `${endpointName(item.sourceKind, item.sourceId)} → ${endpointName("cabinet", item.targetCabinetId)}`,
+        kind: "cable",
+      })),
+    ];
+  }
+
+  function renderEquipment() {
+    const entries = inventoryEntries();
+    const query = equipmentSearch.value.trim().toLocaleLowerCase("ru");
+    const filtered = entries.filter((entry) => [entry.type, entry.location, entry.item.name, entry.item.model, entry.item.ip, entry.item.mac, entry.item.note]
+      .some((value) => String(value || "").toLocaleLowerCase("ru").includes(query)));
+    document.querySelector("#equipment-count").textContent = query
+      ? `Найдено: ${filtered.length} из ${entries.length}` : `Всего элементов: ${entries.length}`;
+    equipmentGroups.replaceChildren();
+    if (!filtered.length) {
+      const empty = document.createElement("p");
+      empty.className = "equipment-empty";
+      empty.textContent = entries.length ? "По вашему запросу ничего не найдено." : "Оборудования пока нет. Добавьте объекты на карте или оборудование в шкафы.";
+      equipmentGroups.append(empty);
+      return;
+    }
+    const groups = new Map();
+    filtered.forEach((entry) => {
+      if (!groups.has(entry.type)) groups.set(entry.type, []);
+      groups.get(entry.type).push(entry);
+    });
+    groups.forEach((items, type) => {
+      const group = document.createElement("details");
+      group.className = "equipment-group";
+      group.open = true;
+      const summary = document.createElement("summary");
+      summary.textContent = `${type} · ${items.length}`;
+      const scroll = document.createElement("div");
+      scroll.className = "equipment-table-scroll";
+      const table = document.createElement("table");
+      table.className = "equipment-table";
+      const head = table.createTHead().insertRow();
+      ["Название", "Расположение", "Модель", "IP-адрес", "MAC / Порты", "Описание", "Фотографии", ""].forEach((title) => {
+        const th = document.createElement("th");
+        th.scope = "col";
+        th.textContent = title;
+        head.append(th);
+      });
+      const body = table.createTBody();
+      items.forEach((entry) => {
+        const { item, kind } = entry;
+        const row = body.insertRow();
+        function field(key, label, multiline = false) {
+          const cell = row.insertCell();
+          const input = document.createElement(multiline ? "textarea" : "input");
+          input.value = item[key] || "";
+          input.id = `inventory-${kind}-${item.id}-${key}`;
+          input.maxLength = key === "ports" ? 20 : 1000;
+          input.setAttribute("aria-label", `${label}: ${item.name || type}`);
+          input.placeholder = "Не указано";
+          if (multiline) input.rows = 2;
+          if (key === "ports") { input.type = "number"; input.min = "1"; input.max = "512"; }
+          input.addEventListener("input", () => { item[key] = input.value; });
+          input.addEventListener("change", () => {
+            if (key === "ports" && input.value) {
+              item.ports = String(clamp(Math.round(Number(input.value) || 1), 1, 512));
+              input.value = item.ports;
+            }
+          });
+          cell.append(input);
+        }
+        function blank() { row.insertCell().textContent = "—"; }
+        field("name", "Название");
+        {
+          const photos = document.createElement("div");
+          photos.className = "equipment-photos";
+          objectImageKinds.forEach(({ key, title }) => {
+            if (!item[key]) return;
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "object-image__thumbnail";
+            button.title = title;
+            button.setAttribute("aria-label", `${item.name || "Камера"}: ${title}`);
+            const image = document.createElement("img");
+            image.src = item[key];
+            image.alt = title;
+            image.loading = "lazy";
+            button.append(image);
+            button.addEventListener("click", () => showObjectImage(item, key, title));
+            photos.append(button);
+          });
+          row.cells[0].append(photos);
+        }
+        row.insertCell().textContent = entry.location;
+        if (kind === "camera" || kind === "equipment") {
+          field("model", "Модель");
+          field("ip", "IP-адрес");
+          field(kind === "camera" ? "mac" : "ports", kind === "camera" ? "MAC" : "Количество портов");
+        } else { blank(); blank(); blank(); }
+        field("note", "Описание", true);
+        const imageCell = row.insertCell();
+        const imageDetails = document.createElement("details");
+        imageDetails.className = "equipment-image-editor";
+        const imageSummary = document.createElement("summary");
+        imageSummary.textContent = "Добавить / изменить фото";
+        const imageEditor = document.createElement("div");
+        imageEditor.className = "object-images";
+        renderObjectImages(item, imageEditor);
+        imageDetails.append(imageSummary, imageEditor);
+        imageCell.append(imageDetails);
+        const show = document.createElement("button");
+        show.type = "button";
+        show.className = "button";
+        show.textContent = "На карте";
+        show.addEventListener("click", () => {
+          switchWorkspace("map");
+          const target = kind === "cable" ? cableRouteNodes(item)[0] : entry.cabinet || item;
+          if (kind === "camera") selectCamera(item.id);
+          else if (kind === "mount") selectMount(item.id);
+          else if (kind === "cable") selectCable(item.id);
+          else selectCabinet(target.id);
+          if (entry.cabinet) {
+            const card = getCabinetCard(entry.cabinet);
+            card.open = true;
+            card.collapsed = false;
+            card.editingEquipmentId = item.id;
+            renderObjects();
+          }
+          if (target) ensurePointVisible(target);
+        });
+        const actions = row.insertCell();
+        actions.append(show);
+        if (kind === "cabinet") {
+          const scheme = document.createElement("button");
+          scheme.type = "button";
+          scheme.className = "button";
+          scheme.textContent = "Схема подключений";
+          scheme.addEventListener("click", () => openCabinetScheme(item.id));
+          actions.append(scheme);
+        }
+      });
+      scroll.append(table);
+      group.append(summary, scroll);
+      equipmentGroups.append(group);
+    });
+  }
+
   function renderObjects() {
+    reconcileCabinetTabs();
+    if (state.activeWorkspace.startsWith("cabinet:")) renderCabinetScheme();
+    if (state.activeWorkspace === "equipment") renderEquipment();
     hideCableBundlePicker();
     syncObjectLabels();
     elements.objectsLayer.replaceChildren();
@@ -1749,6 +2499,151 @@
       link.textContent = camera.name || "Без названия";
       link.title = `Открыть камеру: ${link.textContent}`;
       elements.mountedCameraList.append(link);
+    });
+  }
+
+  function normalizeObjectImage(value) {
+    if (typeof value !== "string" || value.length > 6 * 1024 * 1024) return "";
+    return /^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(value) ? value : "";
+  }
+
+  const objectImageJobs = new WeakMap();
+  const objectImageKinds = [
+    { key: "modelImage", title: "Вид объекта" },
+    { key: "locationImage", title: "Фото места установки" },
+  ];
+
+  function showObjectImage(object, key, title) {
+    if (!object[key]) return;
+    const dialog = document.querySelector("#image-viewer");
+    document.querySelector("#image-viewer-title").textContent = `${object.name || "Объект"} · ${title}`;
+    const image = document.querySelector("#image-viewer-image");
+    image.src = object[key];
+    image.alt = title;
+    dialog.showModal();
+  }
+
+  document.querySelector("#close-image-viewer").addEventListener("click", () => document.querySelector("#image-viewer").close());
+  document.querySelector("#image-viewer").addEventListener("close", () => document.querySelector("#image-viewer-image").removeAttribute("src"));
+
+  async function prepareObjectImage(blob) {
+    if (!/^image\/(?:jpeg|png|webp)$/i.test(blob.type)) throw new Error("Выберите изображение JPG, PNG или WebP.");
+    if (blob.size > 20 * 1024 * 1024) throw new Error("Изображение слишком большое. Выберите файл до 20 МБ.");
+    const url = URL.createObjectURL(blob);
+    try {
+      const image = await decodeImage(url);
+      const scale = Math.min(1, 1600 / Math.max(image.naturalWidth, image.naturalHeight));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const context = canvas.getContext("2d");
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const data = canvas.toDataURL("image/jpeg", 0.86);
+      if (!normalizeObjectImage(data)) throw new Error("Не удалось подготовить изображение. Выберите другой файл.");
+      return data;
+    } finally { URL.revokeObjectURL(url); }
+  }
+
+  async function loadObjectImage(object, key, source, status) {
+    const jobs = objectImageJobs.get(object) || {};
+    objectImageJobs.set(object, jobs);
+    const token = {};
+    jobs[key] = token;
+    status.textContent = "Загрузка изображения…";
+    try {
+      let blob = source;
+      if (typeof source === "string") {
+        let url;
+        try { url = new URL(source); } catch { throw new Error("Укажите прямую ссылку на изображение, начиная с https:// или http://."); }
+        if (!["https:", "http:"].includes(url.protocol)) throw new Error("Ссылка должна начинаться с https:// или http://.");
+        let response;
+        try {
+          response = await fetch(url.href, { credentials: "omit", referrerPolicy: "no-referrer", signal: AbortSignal.timeout(20000) });
+        } catch { throw new Error("Сайт не разрешает загрузку или недоступен. Сохраните картинку и добавьте её файлом."); }
+        if (!response.ok) throw new Error("Не удалось скачать изображение. Проверьте ссылку или загрузите файл.");
+        if (Number(response.headers.get("content-length")) > 20 * 1024 * 1024) throw new Error("Изображение слишком большое. Выберите файл до 20 МБ.");
+        blob = await response.blob();
+      }
+      const data = await prepareObjectImage(blob);
+      if (jobs[key] !== token || !inventoryEntries().some((entry) => entry.item === object)) return;
+      object[key] = data;
+      recordHistory();
+      refreshDirtyState();
+      if (state.activeWorkspace === "equipment") renderEquipment();
+    } catch (error) {
+      if (jobs[key] === token) status.textContent = error.message || "Не удалось прочитать изображение.";
+    }
+  }
+
+  function renderObjectImages(object, container) {
+    container.replaceChildren();
+    objectImageKinds.forEach(({ key, title }) => {
+      const section = document.createElement("section");
+      section.className = "object-image";
+      const heading = document.createElement("strong");
+      heading.textContent = title;
+      section.append(heading);
+      if (object[key]) {
+        const preview = document.createElement("button");
+        preview.type = "button";
+        preview.className = "object-image__preview";
+        preview.setAttribute("aria-label", `Открыть: ${title}`);
+        const image = document.createElement("img");
+        image.src = object[key];
+        image.alt = title;
+        preview.append(image);
+        preview.addEventListener("click", () => showObjectImage(object, key, title));
+        section.append(preview);
+      }
+      const status = document.createElement("p");
+      status.className = "object-image__status";
+      status.setAttribute("role", "status");
+      const label = document.createElement("label");
+      label.className = "object-image__upload";
+      label.textContent = object[key] ? "Заменить изображение" : "Загрузить изображение";
+      const file = document.createElement("input");
+      file.type = "file";
+      file.accept = "image/jpeg,image/png,image/webp";
+      file.addEventListener("change", () => {
+        if (file.files[0]) loadObjectImage(object, key, file.files[0], status);
+        file.value = "";
+      });
+      label.append(file);
+      section.append(label);
+      if (key === "modelImage") {
+        const form = document.createElement("div");
+        form.className = "object-image__url";
+        const input = document.createElement("input");
+        input.type = "url";
+        input.placeholder = "Прямая ссылка на картинку";
+        input.setAttribute("aria-label", "Ссылка на изображение объекта");
+        const add = document.createElement("button");
+        add.className = "button";
+        add.type = "button";
+        add.textContent = "Загрузить по ссылке";
+        const load = () => loadObjectImage(object, key, input.value.trim(), status);
+        add.addEventListener("click", load);
+        input.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); load(); } });
+        form.append(input, add);
+        section.append(form);
+      }
+      if (object[key]) {
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "object-image__remove";
+        remove.textContent = "Удалить изображение";
+        remove.addEventListener("click", () => {
+          const jobs = objectImageJobs.get(object);
+          if (jobs) jobs[key] = null;
+          object[key] = "";
+          if (state.activeWorkspace === "equipment") renderEquipment();
+        });
+        section.append(remove);
+      }
+      section.append(status);
+      container.append(section);
     });
   }
 
@@ -2276,6 +3171,9 @@
       id: validId(item?.id, "крепления"),
       type: item?.type === "pole" ? "pole" : item?.type === "point" ? "point" : null,
       name: limitedText(item?.name),
+      modelImage: normalizeObjectImage(item?.modelImage),
+      locationImage: normalizeObjectImage(item?.locationImage),
+      note: limitedText(item?.note),
       x: clamp(finiteNumber(item?.x), 0, width),
       y: clamp(finiteNumber(item?.y), 0, height),
     }));
@@ -2294,6 +3192,9 @@
       model: limitedText(item?.model),
       ip: limitedText(item?.ip),
       mac: limitedText(item?.mac),
+      modelImage: normalizeObjectImage(item?.modelImage),
+      locationImage: normalizeObjectImage(item?.locationImage),
+      note: limitedText(item?.note),
       mountId: typeof item?.mountId === "string" && mountIds.has(item.mountId) ? item.mountId : null,
     }));
     const cameraIds = uniqueIds(cameras, "камеры");
@@ -2311,7 +3212,10 @@
           model: limitedText(equipmentItem?.model),
           ip: limitedText(equipmentItem?.ip),
           ports: limitedText(equipmentItem?.ports, "", 20),
+          uplinkPorts: String(clamp(Math.floor(Number(equipmentItem?.uplinkPorts ?? (equipmentItem?.type === "poe-switch" ? 2 : 0)) || 0), 0, 32)),
           note: limitedText(equipmentItem?.note),
+          modelImage: normalizeObjectImage(equipmentItem?.modelImage),
+          locationImage: normalizeObjectImage(equipmentItem?.locationImage),
         };
       });
       const card = item?.card && typeof item.card === "object" ? item.card : {};
@@ -2321,11 +3225,16 @@
         x: clamp(finiteNumber(item?.x), 0, width),
         y: clamp(finiteNumber(item?.y), 0, height),
         equipment,
+        internalConnections: projectArray(item?.internalConnections ?? [], "внутренние соединения").slice(0, 10000),
+        schemeLayout: normalizeSchemeLayout(item?.schemeLayout),
+        note: limitedText(item?.note),
+        modelImage: normalizeObjectImage(item?.modelImage),
+        locationImage: normalizeObjectImage(item?.locationImage),
         card: {
           open: Boolean(card.open),
           collapsed: Boolean(card.collapsed),
-          x: Number.isFinite(Number(card.x)) ? Number(card.x) : null,
-          y: Number.isFinite(Number(card.y)) ? Number(card.y) : null,
+          x: card.x != null && Number.isFinite(Number(card.x)) ? Number(card.x) : null,
+          y: card.y != null && Number.isFinite(Number(card.y)) ? Number(card.y) : null,
           width: clamp(finiteNumber(card.width, CABINET_CARD_WIDTH), MIN_CABINET_CARD_WIDTH, MAX_CABINET_CARD_WIDTH),
           addMenuOpen: false,
           editingEquipmentId: null,
@@ -2349,14 +3258,31 @@
       return {
         id: validId(item?.id, "кабеля"),
         name: limitedText(item?.name),
+        note: limitedText(item?.note),
+        modelImage: normalizeObjectImage(item?.modelImage),
+        locationImage: normalizeObjectImage(item?.locationImage),
         type,
         sourceKind,
         sourceId,
+        sourceConnection: sourceKind === "cabinet" ? validPortConnection(item?.sourceConnection, cabinets.find((cabinet) => cabinet.id === sourceId)) : null,
+        targetConnection: validPortConnection(item?.targetConnection, cabinets.find((cabinet) => cabinet.id === targetCabinetId)),
         viaMountIds: projectArray(item?.viaMountIds ?? [], "маршрут кабеля").filter((id) => mountIds.has(id)),
         targetCabinetId,
       };
     });
     uniqueIds(cables, "кабели");
+    const occupiedPorts = new Set();
+    cables.forEach((cable) => {
+      [["targetConnection", cable.targetCabinetId], ["sourceConnection", cable.sourceId]].forEach(([key, cabinetId]) => {
+        const connection = cable[key];
+        if (!connection) return;
+        const portKey = `${cabinetId}:${connection.equipmentId}:${connection.port}`;
+        if (occupiedPorts.has(portKey)) cable[key] = null;
+        else occupiedPorts.add(portKey);
+      });
+    });
+
+    cabinets.forEach((cabinet) => { cabinet.internalConnections = validInternalConnections(cabinet, cables); });
 
     const counters = project.counters || {};
     return {
@@ -2442,7 +3368,7 @@
     elements.elementScaleInput.value = "100";
     elements.elementScaleValue.value = "100%";
     setMapControlsEnabled(false);
-    refreshEditor();
+    resetCabinetSchemeSession();
     resetHistory();
     markProjectClean();
   }
@@ -2494,7 +3420,7 @@
       elements.elementScaleInput.value = String(Math.round(state.elementScale * 100));
       elements.elementScaleValue.value = `${Math.round(state.elementScale * 100)}%`;
       showLoadedMap();
-      refreshEditor();
+      resetCabinetSchemeSession();
       fitMap();
       resetHistory();
       markProjectClean();
@@ -3204,10 +4130,13 @@
       return;
     }
     if (event.key === "Escape") {
+      if (state.activeWorkspace.startsWith("cabinet:")) {
+        schemeSelection = null; selectedSchemeWire = null; schemeMessage = ""; renderCabinetScheme();
+      }
       hideCableBundlePicker();
       if (state.activeTool) setActiveTool(null);
     }
-    if (event.key === "Delete" && !event.target.matches("input")) {
+    if (event.key === "Delete" && state.activeWorkspace === "map" && !event.target.matches("input, textarea, [contenteditable]")) {
       if (state.selectedCameraId) elements.deleteCamera.click();
       else if (state.selectedMountId) elements.deleteMount.click();
       else if (state.selectedCabinetId) elements.deleteCabinet.click();
@@ -3218,6 +4147,7 @@
   const resizeObserver = new ResizeObserver((entries) => {
     if (!state.imageWidth) return;
     const rect = entries[0].contentRect;
+    if (!rect.width || !rect.height || state.activeWorkspace !== "map") return;
     if (state.fitted) {
       fitMap();
       return;
