@@ -80,7 +80,7 @@ function setup({ fileIO = false } = {}) {
       assignInternalConnection, validInternalConnections, equipmentUplinks, normalizeSchemeLayout, routeSchemeWire,
       saveProject, openProject, resetProject, schemeScrollPositions, openCabinetScheme,
       cableRouteNodes, finishCable, setActiveTool, undo, renderEquipment, preparePrintSheet, renderView, renderObjects,
-      removeEquipment, revealEquipmentDescription, bindCableEndpoint, inventoryColumns };
+      removeEquipment, revealEquipmentDescription, bindCableEndpoint, inventoryColumns, syncProperties };
   })();`;
   vm.createContext(context);
   vm.runInContext(source, context);
@@ -691,4 +691,32 @@ test("port faults override occupancy, persist and can be cleared without disconn
   assert.equal(a.state.cabinets[0].equipment[0].faultyPorts[0], 1);
   a.preparePrintSheet();
   assert.equal(nodes.get("#print-summary").textContent, "Камер: 2 · Узлов: 2");
+});
+
+test("properties window drags by its heading, stays within the map and retains its position", () => {
+  const { api: a, nodes } = setup();
+  const popover = nodes.get("#properties-popover");
+  const panel = nodes.get("#camera-properties");
+  popover.getBoundingClientRect = () => ({ left: parseFloat(popover.style.left) || 12, top: parseFloat(popover.style.top) || 12, width: 290, height: 260 });
+  panel.getBoundingClientRect = () => ({ width: 290, height: 260 });
+  nodes.get("#cabinet-properties").getBoundingClientRect = () => ({ width: 290, height: 160 });
+  a.state.selectedCameraId = "c1";
+  a.syncProperties();
+  const event = (x, y, interactive = false) => ({ button: 0, pointerId: 7, clientX: x, clientY: y, target: { closest(selector) { return selector === ".properties__heading" || interactive ? {} : null; } }, preventDefault() {}, stopPropagation() {} });
+  popover.handlers.pointerdown(event(20, 20));
+  popover.handlers.pointermove(event(220, 120));
+  assert.equal(popover.style.left, "212px");
+  assert.equal(popover.style.top, "112px");
+  popover.handlers.pointermove(event(2000, 2000));
+  assert.equal(popover.style.left, "598px");
+  assert.equal(popover.style.top, "328px");
+  popover.handlers.pointerup(event(2000, 2000));
+  a.state.selectedCameraId = null;
+  a.state.selectedCabinetId = "cabinet1"; a.state.showCabinetProperties = true;
+  a.syncProperties();
+  assert.equal(popover.style.left, "598px");
+  assert.equal(popover.style.top, "328px");
+  popover.handlers.pointerdown(event(600, 330, true));
+  popover.handlers.pointermove(event(0, 0));
+  assert.equal(popover.style.left, "598px", "interactive heading controls do not start a drag");
 });

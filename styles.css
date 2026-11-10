@@ -804,7 +804,6 @@ button, input, textarea { font: inherit; }
   position: absolute;
   z-index: 40;
   top: 12px;
-  bottom: 12px;
   left: 12px;
   display: flex;
   align-items: flex-start;
@@ -823,6 +822,9 @@ button, input, textarea { font: inherit; }
   pointer-events: auto;
   touch-action: auto;
 }
+
+.properties-popover .properties__heading { cursor: grab; touch-action: none; user-select: none; }
+.properties-popover.is-moving .properties__heading { cursor: grabbing; }
 
 .workspace.has-map { cursor: grab; }
 .workspace.is-dragging { cursor: grabbing; }

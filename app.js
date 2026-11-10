@@ -2427,6 +2427,25 @@
     });
   }
 
+  let propertiesPosition = null;
+  let propertiesDrag = null;
+
+  function positionPropertiesPopover(position = propertiesPosition) {
+    const bounds = elements.workspace.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) return;
+    const panels = [elements.cameraProperties, elements.mountProperties, elements.cabinetProperties, elements.cableProperties];
+    panels.forEach((panel) => { panel.style.maxHeight = `${Math.max(40, bounds.height - 24)}px`; });
+    const panel = panels.find((panel) => !panel.hidden);
+    if (!panel) return;
+    const width = elements.propertiesPopover.getBoundingClientRect().width;
+    const height = panel.getBoundingClientRect().height;
+    const x = clamp(position?.x ?? 12, 12, Math.max(12, bounds.width - width - 12));
+    const y = clamp(position?.y ?? 12, 12, Math.max(12, bounds.height - height - 12));
+    elements.propertiesPopover.style.left = `${x}px`;
+    elements.propertiesPopover.style.top = `${y}px`;
+    if (position) propertiesPosition = { x, y };
+  }
+
   function syncProperties() {
     const camera = getCamera(state.selectedCameraId);
     const mount = getMount(state.selectedMountId);
@@ -2469,6 +2488,7 @@
       elements.cableSource.textContent = endpointName(cable.sourceKind, cable.sourceId);
       elements.cableTarget.textContent = endpointName(cable.targetCameraId ? "camera" : "cabinet", cable.targetCameraId || cable.targetCabinetId);
     }
+    positionPropertiesPopover();
   }
 
   function refreshEditor() {
@@ -3388,7 +3408,30 @@
     renderObjects();
   });
   elements.savePdfButton.addEventListener("click", saveAsPdf);
-  elements.propertiesPopover.addEventListener("pointerdown", (event) => event.stopPropagation());
+  elements.propertiesPopover.addEventListener("pointerdown", (event) => {
+    event.stopPropagation();
+    if (event.button !== 0 || !event.target.closest(".properties__heading") || event.target.closest("button, input, select, textarea, label, a")) return;
+    event.preventDefault();
+    const rect = elements.propertiesPopover.getBoundingClientRect();
+    const workspace = elements.workspace.getBoundingClientRect();
+    propertiesDrag = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, x: rect.left - workspace.left, y: rect.top - workspace.top };
+    elements.propertiesPopover.setPointerCapture(event.pointerId);
+    elements.propertiesPopover.classList.add("is-moving");
+  });
+  elements.propertiesPopover.addEventListener("pointermove", (event) => {
+    if (!propertiesDrag || event.pointerId !== propertiesDrag.pointerId) return;
+    event.stopPropagation(); event.preventDefault();
+    positionPropertiesPopover({ x: propertiesDrag.x + event.clientX - propertiesDrag.clientX, y: propertiesDrag.y + event.clientY - propertiesDrag.clientY });
+  });
+  function finishPropertiesDrag(event) {
+    if (!propertiesDrag || event.pointerId !== propertiesDrag.pointerId) return;
+    propertiesDrag = null;
+    elements.propertiesPopover.classList.remove("is-moving");
+    if (elements.propertiesPopover.hasPointerCapture(event.pointerId)) elements.propertiesPopover.releasePointerCapture(event.pointerId);
+  }
+  elements.propertiesPopover.addEventListener("pointerup", finishPropertiesDrag);
+  elements.propertiesPopover.addEventListener("pointercancel", finishPropertiesDrag);
+  elements.propertiesPopover.addEventListener("lostpointercapture", finishPropertiesDrag);
   elements.propertiesPopover.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
   elements.propertiesPopover.addEventListener("click", (event) => {
     if (event.target.closest("[data-close-properties]")) {
@@ -3895,6 +3938,7 @@
   });
 
   const resizeObserver = new ResizeObserver((entries) => {
+    positionPropertiesPopover();
     if (!state.imageWidth) return;
     const rect = entries[0].contentRect;
     if (!rect.width || !rect.height || state.activeWorkspace !== "map") return;
