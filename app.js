@@ -353,6 +353,7 @@
         ip: item.ip,
         ports: item.ports,
         uplinkPorts: item.uplinkPorts ?? (item.type === "poe-switch" ? "2" : "0"),
+        faultyPorts: validFaultyPorts(item),
         note: item.note,
         modelImage: item.modelImage || "",
         locationImage: item.locationImage || "",
@@ -1258,6 +1259,10 @@
     return clamp(Math.floor(Number(item.uplinkPorts ?? (item.type === "poe-switch" ? 2 : 0)) || 0), 0, 32);
   }
 
+  function validFaultyPorts(device) {
+    return [...new Set(Array.isArray(device.faultyPorts) ? device.faultyPorts : [])].filter((port) => Number.isInteger(port) && ((port >= 1 && port <= equipmentPorts(device)) || (port > 512 && port <= 512 + equipmentUplinks(device))));
+  }
+
   function samePort(a, b) { return a?.equipmentId === b?.equipmentId && a?.port === b?.port; }
 
   function validInternalConnections(cabinet, cables = state.cables) {
@@ -1414,6 +1419,16 @@
     const cancelSelection = button("Отменить выбор", () => { schemeSelection = null; selectedSchemeWire = null; selectedSchemeDevice = null; schemeMessage = ""; renderCabinetScheme(); });
     cancelSelection.hidden = !schemeSelection && !selectedSchemeWire && !selectedSchemeDevice;
     toolbar.append(cancelSelection);
+    const selectedPortDevice = schemeSelection?.kind === "port" ? devices.find((item) => item.id === schemeSelection.equipmentId) : null;
+    if (selectedPortDevice && !printCabinet) {
+      const port = schemeSelection.port;
+      const faulty = validFaultyPorts(selectedPortDevice).includes(port);
+      toolbar.append(button(faulty ? "Снять неисправность" : "Отметить неисправным", () => {
+        const ports = validFaultyPorts(selectedPortDevice);
+        selectedPortDevice.faultyPorts = faulty ? ports.filter((value) => value !== port) : [...ports, port];
+        recordHistory(); refreshDirtyState(); renderCabinetScheme();
+      }));
+    }
     const deleteDevice = button("Удалить устройство", () => {
       const selection = selectedSchemeDevice, item = selectedObject(selection);
       if (!item) return;
@@ -1568,12 +1583,13 @@
     }
     function pin(end, text, x, y, used, socket = false) {
       const selected = schemeSelection && anchorKey(schemeSelection) === anchorKey(end);
-      const el = button(text, () => pick(end), `scheme-pin${used ? " is-used" : ""}${selected ? " is-selected" : ""}`);
+      const faulty = socket && validFaultyPorts(devices.find((item) => item.id === end.equipmentId) || {}).includes(end.port);
+      const el = button(text, () => pick(end), `scheme-pin${used ? " is-used" : ""}${faulty ? " is-faulty" : ""}${selected ? " is-selected" : ""}`);
       el.style.left = `${x}px`; el.style.top = `${y}px`;
       if (socket) { el.className += " scheme-pin--socket"; el.textContent = end.port > 512 ? `U${end.port - 512}` : String(end.port); }
-      el.title = text;
+      el.title = faulty ? `${text}: неисправен` : text;
       el.setAttribute("aria-pressed", String(Boolean(selected)));
-      el.setAttribute("aria-label", end.kind === "cable" ? text : `${devices.find((item) => item.id === end.equipmentId)?.name || "Устройство"}: ${text}${used ? ", занят" : ", свободен"}`);
+      el.setAttribute("aria-label", end.kind === "cable" ? text : `${devices.find((item) => item.id === end.equipmentId)?.name || "Устройство"}: ${text}${faulty ? ", неисправен" : used ? ", занят" : ", свободен"}`);
       board.append(el); pinElements.set(anchorKey(end), el);
       anchors.set(anchorKey(end), socket ? { x: x + 24, y: y + 44, direction: "bottom" } : { x: x + 66, y: y + 14, direction: "right" });
     }
@@ -2006,7 +2022,7 @@
     if (!state.imageWidth || !state.imageHeight) return false;
     renderObjects();
     elements.printTitle.textContent = state.projectName || "Схема размещения камер";
-    elements.printSummary.textContent = `Камер: ${state.cameras.length} · Креплений: ${state.mounts.length} · Узлов: ${state.cabinets.length} · Кабелей: ${state.cables.length}`;
+    elements.printSummary.textContent = `Камер: ${state.cameras.length} · Узлов: ${state.cabinets.length}`;
     const now = new Date();
     elements.printDate.dateTime = now.toISOString();
     elements.printDate.textContent = new Intl.DateTimeFormat("ru-RU", { dateStyle: "long" }).format(now);
@@ -2968,6 +2984,7 @@
           ip: limitedText(equipmentItem?.ip),
           ports: limitedText(equipmentItem?.ports, "", 20),
           uplinkPorts: String(clamp(Math.floor(Number(equipmentItem?.uplinkPorts ?? (equipmentItem?.type === "poe-switch" ? 2 : 0)) || 0), 0, 32)),
+          faultyPorts: Array.isArray(equipmentItem?.faultyPorts) ? equipmentItem.faultyPorts.filter((port) => Number.isInteger(port) && port > 0 && port <= 544) : [],
           note: limitedText(equipmentItem?.note),
           modelImage: normalizeObjectImage(equipmentItem?.modelImage),
           locationImage: normalizeObjectImage(equipmentItem?.locationImage),
@@ -3035,7 +3052,10 @@
       });
     });
 
-    cabinets.forEach((cabinet) => { cabinet.internalConnections = validInternalConnections(cabinet, cables); });
+    cabinets.forEach((cabinet) => {
+      cabinet.internalConnections = validInternalConnections(cabinet, cables);
+      cabinet.equipment.forEach((device) => { device.faultyPorts = validFaultyPorts(device); });
+    });
 
     const counters = project.counters || {};
     return {

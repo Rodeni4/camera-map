@@ -699,6 +699,7 @@ button, input, textarea { font: inherit; }
 .scheme-pin { position: absolute; z-index: 3; width: 66px; height: 28px; padding: 2px; font-size: 11px; border: 1px solid #94a3b8; border-radius: 5px; background: #f1f5f9; cursor: crosshair; color: #334155; }
 .scheme-pin.is-used { background: #dcfce7; border-color: #16a34a; color: #166534; }
 .scheme-pin.is-selected { background: #dbeafe; border: 2px solid #2563eb; outline: 3px solid #bfdbfe; }
+.scheme-pin.is-faulty { background: #fee2e2; border-color: #dc2626; color: #991b1b; }
 .scheme-pin::after { content: ""; position: absolute; right: -4px; top: calc(50% - 4px); width: 8px; height: 8px; border: 2px solid #64748b; border-radius: 50%; background: #fff; }
 .scheme-pin--socket { width: 48px; height: 44px; padding: 0 0 24px; border-color: #94a3b8; background: #e2e8f0; font-size: 11px; font-weight: 600; }
 .scheme-pin--socket::before { content: ""; position: absolute; left: 9px; right: 9px; top: 17px; height: 17px; border: 2px solid #475569; border-radius: 2px 2px 5px 5px; background: repeating-linear-gradient(90deg, #d4ad55 0 2px, #334155 2px 4px); box-shadow: inset 0 -8px #1e293b; }

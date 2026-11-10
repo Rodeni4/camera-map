@@ -668,3 +668,27 @@ test("camera and cabinet blocks reveal their inventory rows and offer confirmed 
     assert.ok((kind === "camera" ? a.state.cameras : a.state.cabinets).some(item => item.id === id));
   }
 });
+
+test("port faults override occupancy, persist and can be cleared without disconnecting", () => {
+  const { api: a, nodes } = setup();
+  const cabinet = a.state.cabinets[0], device = cabinet.equipment[0];
+  a.state.activeWorkspace = "cabinet:cabinet1";
+  a.assignCablePort(a.state.cables[0], cabinet, device.id, 1);
+  a.resetHistory(); a.renderCabinetScheme();
+  const flatten = el => [el, ...el.children.flatMap(flatten)];
+  const elements = () => flatten(nodes.get("#cabinet-scheme-panel"));
+  elements().find(el => el["aria-label"] === "PoE: PoE 1, занят").handlers.click();
+  elements().find(el => el.textContent === "Отметить неисправным").handlers.click();
+  assert.equal(device.faultyPorts[0], 1);
+  assert.ok(elements().find(el => el["aria-label"] === "PoE: PoE 1, неисправен").className.includes("is-faulty"));
+  assert.equal(a.state.cables[0].targetConnection.port, 1);
+  const loaded = a.normalizeProject({ format: "camera-map-project", version: 1, project: a.projectContent() });
+  assert.equal(loaded.cabinets[0].equipment[0].faultyPorts[0], 1);
+  elements().find(el => el.textContent === "Снять неисправность").handlers.click();
+  assert.equal(device.faultyPorts.length, 0);
+  assert.equal(a.state.cables[0].targetConnection.port, 1);
+  a.undo();
+  assert.equal(a.state.cabinets[0].equipment[0].faultyPorts[0], 1);
+  a.preparePrintSheet();
+  assert.equal(nodes.get("#print-summary").textContent, "Камер: 2 · Узлов: 2");
+});
