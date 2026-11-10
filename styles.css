@@ -707,12 +707,7 @@ button, input, textarea { font: inherit; }
 .scheme-pin.is-traced::after { border-color: #d97706; background: #fbbf24; }
 .scheme-node--device { display: grid; grid-template-columns: minmax(60px, 1fr) minmax(50px, .8fr) auto; align-items: start; gap: 8px; padding: 10px; background: linear-gradient(#fff, #f1f5f9); border-color: #94a3b8; }
 .scheme-node--device > strong { min-width: 0; font-size: 12px; line-height: 22px; }
-.scheme-device-edit { position: absolute; right: 8px; top: 33px; border: 0; border-radius: 4px; color: #2563eb; background: #eff6ff; font-size: 10px; cursor: pointer; }
-.equipment-properties-dialog { width: min(520px, 90vw); max-height: 90vh; overflow: auto; border: 1px solid #cbd2dd; border-radius: 12px; padding: 24px; }
-.equipment-properties-dialog::backdrop { background: #17203366; }
-.equipment-properties-dialog h2 { margin-top: 0; font-size: 18px; }
-.equipment-properties-dialog textarea { width: 100%; min-height: 70px; }
-.equipment-properties-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.scheme-node.is-selected { outline: 2px solid #2563eb; outline-offset: 2px; }
 .scheme-node--device > p { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 22px; }
 .scheme-node--device .scheme-port-config { gap: 6px; align-items: center; font-size: 11px; }
 .scheme-node--device .scheme-port-config label { white-space: nowrap; }

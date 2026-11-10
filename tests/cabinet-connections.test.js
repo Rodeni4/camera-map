@@ -28,6 +28,8 @@ class Element {
   remove() {}
   close() { this.open = false; }
   showModal() { this.open = true; }
+  scrollIntoView(options) { this.scrolledIntoView = options; }
+  focus() { this.focused = true; }
   cloneNode(deep) {
     const clone = new Element();
     clone.className = this.className;
@@ -78,7 +80,7 @@ function setup({ fileIO = false } = {}) {
       assignInternalConnection, validInternalConnections, equipmentUplinks, normalizeSchemeLayout, routeSchemeWire,
       saveProject, openProject, resetProject, schemeScrollPositions, openCabinetScheme,
       cableRouteNodes, finishCable, setActiveTool, undo, renderEquipment, preparePrintSheet, renderView, renderObjects,
-      removeEquipment, openEquipmentProperties, bindCableEndpoint, inventoryColumns };
+      removeEquipment, revealEquipmentDescription, bindCableEndpoint, inventoryColumns };
   })();`;
   vm.createContext(context);
   vm.runInContext(source, context);
@@ -96,7 +98,7 @@ function setup({ fileIO = false } = {}) {
       { id: "cable3", type: "fiber", name: "Uplink", sourceKind: "cabinet", sourceId: "cabinet1", targetCabinetId: "cabinet2", viaMountIds: [] },
     ],
   });
-  return { api, nodes, document };
+  return { api, nodes, document, window: context.window };
 }
 
 test("port assignment rejects conflicts and invalid ports without changing the connection", () => {
@@ -315,7 +317,8 @@ test("actual save/open handlers restore cabinet schemes from disk in a fresh ses
         return { async write(blob) { fs.writeFileSync(filePath, await blob.text()); }, async close() {} };
       },
     };
-    const { api: first, nodes: firstNodes } = setup({ fileIO: true });
+    const { api: first, nodes: firstNodes, window: firstWindow } = setup({ fileIO: true });
+    firstWindow.showSaveFilePicker = async () => fileHandle;
     first.state.projectFileHandle = fileHandle;
     const [cabinet, remote] = first.state.cabinets;
     cabinet.equipment.push({ id: "equipment3", name: "Router", type: "wifi-router", ports: "4", uplinkPorts: "0" });
@@ -336,7 +339,8 @@ test("actual save/open handlers restore cabinet schemes from disk in a fresh ses
     assert.equal(first.state.isDirty, false);
     assert.ok(fs.existsSync(filePath));
     const snapshot = JSON.parse(fs.readFileSync(filePath, "utf8")).project;
-    const { api: reopened, nodes: reopenedNodes } = setup({ fileIO: true });
+    const { api: reopened, nodes: reopenedNodes, window: reopenedWindow } = setup({ fileIO: true });
+    reopenedWindow.showSaveFilePicker = async () => fileHandle;
     await reopened.openProject({ name: "review.cmap", async text() { return fs.readFileSync(filePath, "utf8"); } }, fileHandle);
     assert.equal(reopenedNodes.get("#error-message").hidden, true);
     assert.equal(reopened.state.isDirty, false);
@@ -435,7 +439,7 @@ test("inventory shows specific columns and cable fields persist after reload", (
   const tableFor = (label) => groups.find(group => group.children[0].textContent.startsWith(label)).children[1].children[0];
   const titles = table => table.children[0].children[0].children.map(cell => cell.textContent);
   assert.deepEqual(titles(tableFor("Камеры")), ["Название", "Модель", "IP-адрес", "MAC / Порты", "Описание", "Фотографии", ""]);
-  assert.deepEqual(titles(tableFor("Шкафы")), ["Название", "Описание", "Фотографии", ""]);
+  assert.deepEqual(titles(tableFor("Узлы")), ["Название", "Описание", "Фотографии", ""]);
   const copper = tableFor("Кабели · Витая");
   const fiber = tableFor("Кабели · Оптоволокно");
   assert.deepEqual(titles(copper), ["Название", "Расположение", "Тип", "Прокладка", "Длина, м", "Описание", "Фотографии", ""]);
@@ -482,7 +486,7 @@ test("PDF includes the viewport, the complete inventory and every cabinet withou
   assert.equal(pages[0].children[0].textContent, "Перечень оборудования");
   assert.ok(pages[0].children.some(child => child.textContent === "Камеры"));
   for (const cabinet of a.state.cabinets) {
-    assert.ok(pages.some(page => page.children[0].textContent.startsWith(`Схема шкафа · ${cabinet.name}`)));
+    assert.ok(pages.some(page => page.children[0].textContent.startsWith(`Схема узла · ${cabinet.name}`)));
   }
 });
 
@@ -515,35 +519,12 @@ test("large cabinet schemes shrink onto exactly one page per cabinet", () => {
   const { api: a, nodes } = setup();
   a.state.cabinets[0].schemeLayout = { scale: 1, positions: { "device:equipment1": { x: 6000, y: 5000 } } };
   a.preparePrintSheet();
-  const pages = nodes.get("#print-sheet").children.filter(page => page.children[0].textContent.startsWith("Схема шкафа"));
+  const pages = nodes.get("#print-sheet").children.filter(page => page.children[0].textContent.startsWith("Схема узла"));
   assert.equal(pages.length, a.state.cabinets.length);
   const transform = pages[0].children[1].children[0].style.transform;
   const scale = Number(transform.match(/scale\(([^)]+)\)/)[1]);
   assert.ok(scale > 0 && scale < 0.7);
   for (const page of pages) assert.doesNotMatch(page.children[0].textContent, /часть/);
-});
-
-test("device properties save fields, clean invalid ports and removal preserves other devices", () => {
-  const { api: a, nodes } = setup();
-  const cabinet = a.state.cabinets[0], device = cabinet.equipment[0];
-  a.assignCablePort(a.state.cables[0], cabinet, device.id, 8);
-  cabinet.schemeLayout = { scale: 1, positions: { [`device:${device.id}`]: { x: 20, y: 30 } } };
-  a.openEquipmentProperties(cabinet, device);
-  const dialog = nodes.get("#equipment-properties-dialog"), form = dialog.children[0];
-  const fields = new Map(form.children.filter(child => child.className === "field").map(label => [label.children[1].id, label.children[1]]));
-  fields.get("equipment-properties-model").value = "New model";
-  fields.get("equipment-properties-ports").value = "4";
-  form.handlers.submit({ preventDefault() {} });
-  assert.equal(device.model, "New model");
-  assert.equal(device.ports, "4");
-  assert.equal(a.state.cables[0].targetConnection, null);
-  assert.equal(dialog.open, false);
-  a.removeEquipment(cabinet, device.id);
-  assert.equal(cabinet.equipment.length, 0);
-  assert.equal(cabinet.schemeLayout.positions[`device:${device.id}`], undefined);
-  assert.equal(a.state.cabinets[1].equipment.length, 1);
-  a.undo();
-  assert.equal(a.state.cabinets[0].equipment.length, 1);
 });
 
 test("free cable endpoints bind to objects, follow them and survive reopening", () => {
@@ -591,4 +572,99 @@ test("saved viewport is restored instead of fitting the whole map", async () => 
   assert.equal(a.state.fitted, false);
   delete payload.project.settings.viewport;
   assert.equal(a.normalizeProject(payload).settings.viewport, null);
+});
+
+test("every save asks for a destination and cancellation or failure preserves project identity", async () => {
+  const { api: a, window, nodes } = setup({ fileIO: true });
+  const saved = [];
+  const handle = name => ({ name, async createWritable() { return { async write(blob) { saved.push(JSON.parse(await blob.text())); }, async close() {} }; } });
+  const original = handle("original.cmap"), copy = handle("copy.cmap");
+  a.state.projectFileHandle = original;
+  a.state.projectFileName = original.name;
+  const requests = [];
+  window.showSaveFilePicker = async options => { requests.push(options); return requests.length === 1 ? original : copy; };
+  await a.saveProject();
+  await a.saveProject();
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].suggestedName, "original.cmap");
+  assert.equal(requests[1].startIn, original);
+  assert.equal(a.state.projectFileHandle, copy);
+  assert.equal(a.state.projectName, "copy");
+  assert.equal(saved[1].project.name, "copy");
+  a.state.cameras[0].name = "Unsaved change";
+  window.showSaveFilePicker = async () => { throw Object.assign(new Error("Canceled"), { name: "AbortError" }); };
+  await a.saveProject();
+  assert.equal(saved.length, 2);
+  assert.equal(a.state.projectFileHandle, copy);
+  assert.equal(a.state.projectName, "copy");
+  window.showSaveFilePicker = async () => ({ name: "failed.cmap", async createWritable() { throw new Error("Write failed"); } });
+  await a.saveProject();
+  assert.equal(a.state.projectName, "copy");
+  assert.equal(a.state.projectFileName, "copy.cmap");
+  assert.equal(nodes.get("#error-message").hidden, false);
+});
+
+test("device selection exposes toolbar deletion and double click reveals its inventory description", () => {
+  const { api: a, nodes } = setup();
+  a.state.activeWorkspace = "cabinet:cabinet1";
+  a.assignCablePort(a.state.cables[0], a.state.cabinets[0], "equipment1", 1);
+  a.resetHistory();
+  a.renderCabinetScheme();
+  const flatten = el => [el, ...el.children.flatMap(flatten)];
+  const panel = nodes.get("#cabinet-scheme-panel");
+  let elements = flatten(panel);
+  const device = elements.find(el => el.className === "scheme-node scheme-node--device");
+  const remove = elements.find(el => el.textContent === "Удалить устройство");
+  assert.equal(remove.hidden, true);
+  assert.equal(elements.some(el => el.className === "scheme-device-edit"), false);
+  device.handlers.click({ target: { closest() { return null; } } });
+  assert.equal(remove.hidden, false);
+  nodes.get("#equipment-search").value = "Hidden by search";
+  device.handlers.dblclick({ target: { closest() { return null; } }, preventDefault() {} });
+  assert.equal(a.state.activeWorkspace, "equipment");
+  assert.equal(nodes.get("#equipment-search").value, "");
+  const description = nodes.get("#inventory-equipment-equipment1-note");
+  assert.equal(description.focused, true);
+  assert.equal(description.scrolledIntoView.block, "center");
+  a.state.activeWorkspace = "cabinet:cabinet1";
+  a.renderCabinetScheme();
+  elements = flatten(panel);
+  elements.find(el => el.textContent === "Удалить устройство").handlers.click();
+  assert.equal(a.state.cabinets[0].equipment.length, 0);
+  assert.equal(a.state.cables[0].targetConnection, null);
+  assert.equal(a.state.cabinets[1].equipment.length, 1);
+  a.undo();
+  assert.equal(a.state.cabinets[0].equipment.length, 1);
+  assert.equal(a.state.cables[0].targetConnection.port, 1);
+});
+
+test("camera and cabinet blocks reveal their inventory rows and offer confirmed object deletion", () => {
+  for (const [kind, id, title, removeLabel] of [["camera", "c1", "Камера · Camera 1", "Удалить камеру"], ["cabinet", "cabinet2", "Узел · Cabinet 2", "Удалить узел"]]) {
+    const { api: a, nodes, window } = setup();
+    a.state.activeWorkspace = "cabinet:cabinet1";
+    a.resetHistory(); a.renderCabinetScheme();
+    const flatten = el => [el, ...el.children.flatMap(flatten)];
+    const elements = () => flatten(nodes.get("#cabinet-scheme-panel"));
+    const getCard = () => elements().find(el => el.className === "scheme-node scheme-node--external" && el.children[0].textContent === title);
+    const card = getCard();
+    card.handlers.click();
+    const remove = elements().find(el => el.textContent === removeLabel);
+    assert.equal(remove.hidden, false);
+    assert.equal(getCard(), card, "first click retains the element for a native double click");
+    card.handlers.dblclick({ preventDefault() {} });
+    assert.equal(a.state.activeWorkspace, "equipment");
+    assert.equal(nodes.get(`#inventory-${kind}-${id}-note`).focused, true);
+    a.state.activeWorkspace = "cabinet:cabinet1";
+    a.renderCabinetScheme(); getCard().handlers.click();
+    window.confirm = () => false;
+    elements().find(el => el.textContent === removeLabel).handlers.click();
+    assert.ok((kind === "camera" ? a.state.cameras : a.state.cabinets).some(item => item.id === id));
+    window.confirm = () => true;
+    elements().find(el => el.textContent === removeLabel).handlers.click();
+    assert.equal((kind === "camera" ? a.state.cameras : a.state.cabinets).some(item => item.id === id), false);
+    assert.ok(a.state.cabinets.some(item => item.id === "cabinet1"));
+    assert.equal(a.state.cables.some(cable => kind === "camera" ? cable.sourceId === id || cable.targetCameraId === id : cable.sourceId === id || cable.targetCabinetId === id), false);
+    a.undo();
+    assert.ok((kind === "camera" ? a.state.cameras : a.state.cabinets).some(item => item.id === id));
+  }
 });

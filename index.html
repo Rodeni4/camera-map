@@ -89,7 +89,7 @@
             <button id="cabinet-tool" class="element-tool" type="button" aria-pressed="false" disabled>
               <span class="element-tool__icon element-tool__icon--cabinet" aria-hidden="true">▦</span>
               <span>
-                <strong>Шкаф</strong>
+                <strong>Узел</strong>
                 <small>Добавить на карту</small>
               </span>
             </button>
@@ -212,7 +212,7 @@
 
           <section id="cabinet-properties" class="sidebar__section properties" hidden>
             <div class="properties__heading">
-              <h2>Шкаф</h2>
+              <h2>Узел</h2>
               <button class="icon-button properties__close" type="button" title="Закрыть свойства" aria-label="Закрыть свойства" data-close-properties>×</button>
             </div>
             <label class="field">
@@ -220,10 +220,10 @@
               <input id="cabinet-name" type="text" autocomplete="off">
             </label>
             <button id="open-cabinet-scheme" class="button cabinet-scheme-open" type="button">Схема подключений</button>
-            <p class="properties__hint">Шкаф служит конечной точкой витой пары и оптического кабеля.</p>
+            <p class="properties__hint">Узел служит конечной точкой витой пары и оптического кабеля.</p>
             <div class="properties__actions">
               <button id="close-cabinet-properties" class="button button--primary properties__done" type="button">ОК</button>
-              <button id="delete-cabinet" class="button properties__delete" type="button">Удалить шкаф</button>
+              <button id="delete-cabinet" class="button properties__delete" type="button">Удалить узел</button>
             </div>
           </section>
 
@@ -241,7 +241,7 @@
               <span>Начало</span><strong id="cable-source"></strong>
               <span>Конец</span><strong id="cable-target"></strong>
             </div>
-            <p class="properties__hint">Свободные концы выбранного кабеля можно перетащить к камере или шкафу для привязки. Оптика подключается только к шкафам.</p>
+            <p class="properties__hint">Свободные концы выбранного кабеля можно перетащить к камере или узлу для привязки. Оптика подключается только к узлам.</p>
             <div class="properties__actions">
               <button id="close-cable-properties" class="button button--primary properties__done" type="button">ОК</button>
               <button id="delete-cable" class="button properties__delete" type="button">Удалить кабель</button>
@@ -257,7 +257,7 @@
           <section id="equipment-panel" class="equipment-panel" role="tabpanel" aria-labelledby="equipment-tab" hidden>
             <div class="equipment-toolbar">
               <div><h2>Оборудование проекта</h2><p id="equipment-count" aria-live="polite"></p></div>
-              <label class="field"><span>Поиск оборудования</span><input id="equipment-search" type="search" placeholder="Название, тип, шкаф, модель или IP"></label>
+              <label class="field"><span>Поиск оборудования</span><input id="equipment-search" type="search" placeholder="Название, тип, узел, модель или IP"></label>
             </div>
             <div id="equipment-groups"></div>
           </section>
@@ -271,7 +271,7 @@
             <div id="placement-hint" class="placement-hint" hidden>Щёлкните по карте, чтобы поставить камеру</div>
             <div id="properties-popover" class="properties-popover"></div>
             <div id="cable-type-picker" class="cable-type-picker" role="dialog" aria-labelledby="cable-type-picker-title" hidden>
-              <strong id="cable-type-picker-title">Кабель между шкафами</strong>
+              <strong id="cable-type-picker-title">Кабель между узлами</strong>
               <span>Выберите тип линии</span>
               <div class="cable-type-picker__actions">
                 <button id="choose-fiber-cable" class="cable-type-choice cable-type-choice--fiber" type="button">
@@ -309,7 +309,6 @@
       <div class="image-viewer__heading"><strong id="image-viewer-title"></strong><button id="close-image-viewer" class="button" type="button">Закрыть</button></div>
       <img id="image-viewer-image" alt="">
     </dialog>
-    <dialog id="equipment-properties-dialog" class="equipment-properties-dialog" aria-label="Свойства оборудования"></dialog>
     <script src="app.js"></script>
   </body>
 </html>
