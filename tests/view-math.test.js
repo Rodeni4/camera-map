@@ -118,7 +118,6 @@ const requiredIds = [
   "camera-properties",
   "object-list",
   "pole-tool",
-  "mount-tool",
   "cabinet-tool",
   "cable-tool",
   "cable-type-picker",
@@ -148,7 +147,8 @@ const requiredIds = [
   "free-camera-list",
   "cabinet-properties",
   "cabinet-name",
-  "open-cabinet-card",
+  "open-cabinet-scheme",
+  "camera-status",
   "cable-properties",
   "cable-name",
   "cable-type",
@@ -156,6 +156,7 @@ const requiredIds = [
   "objects-layer",
 ];
 requiredIds.forEach((id) => assert.match(html, new RegExp(`id="${id}"`)));
+assert.doesNotMatch(html, /id="(?:open-cabinet-card|camera-active|mount-tool)"/);
 assert.doesNotMatch(html, /https?:\/\//);
 
 console.log("Проверки геометрии пройдены: карта, координаты и сектор обзора.");

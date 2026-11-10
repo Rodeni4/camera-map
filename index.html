@@ -86,13 +86,6 @@
                 <small>Добавить на карту</small>
               </span>
             </button>
-            <button id="mount-tool" class="element-tool" type="button" aria-pressed="false" disabled>
-              <span class="element-tool__icon element-tool__icon--mount" aria-hidden="true">◆</span>
-              <span>
-                <strong>Точка крепления</strong>
-                <small>Для стены или угла</small>
-              </span>
-            </button>
             <button id="cabinet-tool" class="element-tool" type="button" aria-pressed="false" disabled>
               <span class="element-tool__icon element-tool__icon--cabinet" aria-hidden="true">▦</span>
               <span>
@@ -119,13 +112,18 @@
           <section id="camera-properties" class="sidebar__section properties" hidden>
             <div class="properties__heading">
               <h2>Камера</h2>
-              <label class="camera-active-toggle">
-                <span>Активна</span>
-                <input id="camera-active" type="checkbox" role="switch" checked>
-                <span class="camera-active-toggle__track" aria-hidden="true"></span>
-              </label>
               <button class="icon-button properties__close" type="button" title="Закрыть свойства" aria-label="Закрыть свойства" data-close-properties>×</button>
             </div>
+            <label class="field">
+              <span>Состояние</span>
+              <select id="camera-status">
+                <option value="active">🟢 Активна</option>
+                <option value="alarm">🔴 Авария</option>
+                <option value="problem">🟡 Проблемная</option>
+                <option value="off">⚫ Выключена</option>
+                <option value="removed">⚪ Демонтирована</option>
+              </select>
+            </label>
             <label class="field">
               <span>Название</span>
               <input id="camera-name" type="text" autocomplete="off">
@@ -221,8 +219,7 @@
               <span>Название</span>
               <input id="cabinet-name" type="text" autocomplete="off">
             </label>
-            <button id="open-cabinet-card" class="button cabinet-card-open" type="button">Открыть карточку</button>
-            <button id="open-cabinet-scheme" class="button cabinet-card-open" type="button">Схема подключений</button>
+            <button id="open-cabinet-scheme" class="button cabinet-scheme-open" type="button">Схема подключений</button>
             <p class="properties__hint">Шкаф служит конечной точкой витой пары и оптического кабеля.</p>
             <div class="properties__actions">
               <button id="close-cabinet-properties" class="button button--primary properties__done" type="button">ОК</button>
@@ -244,6 +241,7 @@
               <span>Начало</span><strong id="cable-source"></strong>
               <span>Конец</span><strong id="cable-target"></strong>
             </div>
+            <p class="properties__hint">Свободные концы выбранного кабеля можно перетащить к камере или шкафу для привязки. Оптика подключается только к шкафам.</p>
             <div class="properties__actions">
               <button id="close-cable-properties" class="button button--primary properties__done" type="button">ОК</button>
               <button id="delete-cable" class="button properties__delete" type="button">Удалить кабель</button>
@@ -311,6 +309,7 @@
       <div class="image-viewer__heading"><strong id="image-viewer-title"></strong><button id="close-image-viewer" class="button" type="button">Закрыть</button></div>
       <img id="image-viewer-image" alt="">
     </dialog>
+    <dialog id="equipment-properties-dialog" class="equipment-properties-dialog" aria-label="Свойства оборудования"></dialog>
     <script src="app.js"></script>
   </body>
 </html>

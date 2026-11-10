@@ -12,7 +12,7 @@ class Element {
     this.cells = this.children;
     this.value = "";
     this.dataset = {};
-    this.style = { setProperty() {} };
+    this.style = { setProperty(name, value) { this[name] = value; } };
     this.classList = { add() {}, remove() {}, toggle() {} };
     this.handlers = {};
     this.scrollLeft = 0; this.scrollTop = 0;
@@ -25,7 +25,22 @@ class Element {
   getBoundingClientRect() { return { left: 0, top: 0, width: 900, height: 600 }; }
   setAttribute(name, value) { this[name] = value; }
   removeAttribute(name) { delete this[name]; }
+  remove() {}
+  close() { this.open = false; }
+  showModal() { this.open = true; }
+  cloneNode(deep) {
+    const clone = new Element();
+    clone.className = this.className;
+    clone.textContent = this.textContent;
+    clone.style = { ...this.style };
+    if (deep) clone.append(...this.children.map(child => child.cloneNode(true)));
+    return clone;
+  }
   append(...children) { this.children.push(...children); }
+  createTHead() { const head = new Element(); this.append(head); return head; }
+  createTBody() { const body = new Element(); this.append(body); return body; }
+  insertRow() { const row = new Element(); this.append(row); return row; }
+  insertCell() { const cell = new Element(); this.append(cell); return cell; }
   replaceChildren(...children) { this.children = children; this.cells = children; }
   querySelector() { return new Element(); }
   querySelectorAll() { return []; }
@@ -34,6 +49,8 @@ class Element {
 function setup({ fileIO = false } = {}) {
   const nodes = new Map();
   const document = {
+    handlers: {},
+    body: new Element(),
     querySelector(id) {
       if (!nodes.has(id)) nodes.set(id, new Element());
       return nodes.get(id);
@@ -41,7 +58,7 @@ function setup({ fileIO = false } = {}) {
     querySelectorAll() { return []; },
     createElement() { return new Element(); },
     createElementNS() { return new Element(); },
-    addEventListener() {},
+    addEventListener(name, handler) { this.handlers[name] = handler; },
   };
   const context = {
     document,
@@ -59,7 +76,9 @@ function setup({ fileIO = false } = {}) {
     globalThis.api = { state, assignCablePort, cablePortConnection, projectContent,
       normalizeProject, resetHistory, recordHistory, renderCabinetScheme,
       assignInternalConnection, validInternalConnections, equipmentUplinks, normalizeSchemeLayout, routeSchemeWire,
-      saveProject, openProject, resetProject, schemeScrollPositions, openCabinetScheme };
+      saveProject, openProject, resetProject, schemeScrollPositions, openCabinetScheme,
+      cableRouteNodes, finishCable, setActiveTool, undo, renderEquipment, preparePrintSheet, renderView, renderObjects,
+      removeEquipment, openEquipmentProperties, bindCableEndpoint, inventoryColumns };
   })();`;
   vm.createContext(context);
   vm.runInContext(source, context);
@@ -77,7 +96,7 @@ function setup({ fileIO = false } = {}) {
       { id: "cable3", type: "fiber", name: "Uplink", sourceKind: "cabinet", sourceId: "cabinet1", targetCabinetId: "cabinet2", viaMountIds: [] },
     ],
   });
-  return { api, nodes };
+  return { api, nodes, document };
 }
 
 test("port assignment rejects conflicts and invalid ports without changing the connection", () => {
@@ -375,4 +394,201 @@ test("cabinet scheme adds equipment to the active cabinet and keeps it in the pr
   const restored = a.normalizeProject({ format: "camera-map-project", version: 1, project: a.projectContent() });
   assert.equal(restored.cabinets[0].equipment.at(-1).id, "equipment3");
   assert.ok(restored.cabinets[0].schemeLayout.positions["device:equipment3"]);
+});
+
+test("free cable clicks create bends, preview follows cursor and double click finishes", () => {
+  const { api: a, nodes } = setup();
+  a.state.nextCableId = 4;
+  const workspace = nodes.get("#workspace");
+  a.setActiveTool("cable");
+  const click = (x, y) => workspace.handlers.pointerdown({ button: 0, clientX: x, clientY: y, preventDefault() {} });
+  click(10, 10);
+  workspace.handlers.pointermove({ clientX: 30, clientY: 20 });
+  assert.equal(a.state.cableDraft.cursor.x, 30);
+  assert.equal(a.state.cableDraft.routePoints.length, 0);
+  click(30, 20); click(50, 60);
+  const count = a.state.cables.length;
+  workspace.handlers.dblclick({ target: { closest() { return null; } }, preventDefault() {} });
+  assert.equal(a.state.cables.length, count + 1);
+  assert.equal(a.state.cableDraft, null);
+  const cable = a.state.cables.at(-1);
+  assert.equal(cable.targetCabinetId, null);
+  assert.deepEqual(Array.from(a.cableRouteNodes(cable), p => [p.x, p.y]), [[10, 10], [30, 20], [50, 60]]);
+  const restored = a.normalizeProject({ format: "camera-map-project", version: 1, project: a.projectContent() });
+  assert.deepEqual(Array.from(a.cableRouteNodes(restored.cables.at(-1)), p => [p.x, p.y]), [[10, 10], [30, 20], [50, 60]]);
+});
+
+test("moving cable vertices can be undone without mutating the saved history", () => {
+  const { api: a } = setup();
+  const cable = a.state.cables[0];
+  cable.routePoints = [{ x: 25, y: 35 }];
+  a.resetHistory();
+  cable.routePoints[0].x = 65;
+  a.recordHistory(); a.undo();
+  assert.equal(a.state.cables[0].routePoints[0].x, 25);
+});
+
+test("inventory shows specific columns and cable fields persist after reload", () => {
+  const { api: a, nodes } = setup();
+  a.renderEquipment();
+  const groups = nodes.get("#equipment-groups").children;
+  const tableFor = (label) => groups.find(group => group.children[0].textContent.startsWith(label)).children[1].children[0];
+  const titles = table => table.children[0].children[0].children.map(cell => cell.textContent);
+  assert.deepEqual(titles(tableFor("Камеры")), ["Название", "Модель", "IP-адрес", "MAC / Порты", "Описание", "Фотографии", ""]);
+  assert.deepEqual(titles(tableFor("Шкафы")), ["Название", "Описание", "Фотографии", ""]);
+  const copper = tableFor("Кабели · Витая");
+  const fiber = tableFor("Кабели · Оптоволокно");
+  assert.deepEqual(titles(copper), ["Название", "Расположение", "Тип", "Прокладка", "Длина, м", "Описание", "Фотографии", ""]);
+  assert.deepEqual(titles(fiber), ["Название", "Расположение", "Тип", "Длина, м", "Описание", "Фотографии", ""]);
+  const edit = (table, index, value, event = "input") => {
+    const input = table.children[1].children[0].children[index].children[0];
+    input.value = value; input.handlers[event]();
+  };
+  edit(copper, 2, "UTP Cat.6"); edit(copper, 3, "outdoor", "change"); edit(copper, 4, "25.5");
+  edit(fiber, 2, "ОК-8"); edit(fiber, 3, "120");
+  a.recordHistory();
+  const loaded = a.normalizeProject({ format: "camera-map-project", version: 1, project: a.projectContent() });
+  assert.equal(loaded.cables[0].cableSpecification, "UTP Cat.6");
+  assert.equal(loaded.cables[0].installation, "outdoor");
+  assert.equal(loaded.cables[0].lengthMeters, 25.5);
+  assert.equal(loaded.cables[2].cableSpecification, "ОК-8");
+  assert.equal(loaded.cables[2].installation, "");
+  assert.equal(loaded.cables[2].lengthMeters, 120);
+  assert.equal(loaded.cables[1].lengthMeters, null);
+  nodes.get("#equipment-search").value = "UTP Cat.6";
+  a.renderEquipment();
+  assert.equal(nodes.get("#equipment-groups").children.length, 1);
+});
+
+test("PDF includes the viewport, the complete inventory and every cabinet without changing the view", () => {
+  const { api: a, nodes } = setup();
+  a.state.view = { x: -150, y: -75, scale: 3 };
+  a.state.cameras.forEach(camera => { camera.range = 20; });
+  a.renderView();
+  a.state.activeWorkspace = "equipment";
+  nodes.get("#equipment-search").value = "No matches";
+  const before = JSON.stringify(a.projectContent());
+  assert.equal(a.preparePrintSheet(), true);
+  assert.equal(a.state.activeWorkspace, "equipment");
+  assert.equal(a.state.view.scale, 3);
+  assert.equal(a.state.view.x, -150);
+  assert.equal(JSON.stringify(a.projectContent()), before);
+  const frame = nodes.get("#print-diagram").children[0];
+  assert.equal(frame.className, "print-viewport");
+  assert.equal(frame.style.width, "900px");
+  assert.equal(frame.style.height, "600px");
+  assert.equal(frame.children[0].style.transform, "translate(-150px, -75px) scale(3)");
+  const pages = nodes.get("#print-sheet").children;
+  assert.equal(pages[0].children[0].textContent, "Перечень оборудования");
+  assert.ok(pages[0].children.some(child => child.textContent === "Камеры"));
+  for (const cabinet of a.state.cabinets) {
+    assert.ok(pages.some(page => page.children[0].textContent.startsWith(`Схема шкафа · ${cabinet.name}`)));
+  }
+});
+
+test("camera states set map colors, persist and migrate old active flags", () => {
+  const { api: a, nodes } = setup();
+  const camera = a.state.cameras[0];
+  a.state.selectedCameraId = camera.id;
+  for (const [status, color] of [["active", "#16a34a"], ["alarm", "#dc2626"], ["problem", "#eab308"], ["off", "#111111"], ["removed", "#9ca3af"]]) {
+    nodes.get("#camera-status").handlers.change({ target: { value: status } });
+    assert.equal(camera.status, status);
+    const object = nodes.get("#objects-layer").children.find(el => el.className === "camera-object");
+    assert.equal(object.dataset.status, status);
+    assert.equal(object.children[1].children[0].style["--camera-color"], color);
+    const loaded = a.normalizeProject({ format: "camera-map-project", version: 1, project: a.projectContent() });
+    assert.equal(loaded.cameras[0].status, status);
+  }
+  const project = a.projectContent();
+  delete project.cameras[0].status; project.cameras[0].active = false;
+  delete project.cameras[1].status; project.cameras[1].active = true;
+  project.cabinets[0].card = { open: true, x: 1, y: 2 };
+  const loaded = a.normalizeProject({ format: "camera-map-project", version: 1, project });
+  assert.equal(loaded.cameras[0].status, "off");
+  assert.equal(loaded.cameras[1].status, "active");
+  assert.equal("card" in loaded.cabinets[0], false);
+  assert.equal(loaded.cabinets[0].equipment.length, 1);
+  assert.equal("card" in a.projectContent().cabinets[0], false);
+});
+
+test("large cabinet schemes shrink onto exactly one page per cabinet", () => {
+  const { api: a, nodes } = setup();
+  a.state.cabinets[0].schemeLayout = { scale: 1, positions: { "device:equipment1": { x: 6000, y: 5000 } } };
+  a.preparePrintSheet();
+  const pages = nodes.get("#print-sheet").children.filter(page => page.children[0].textContent.startsWith("Схема шкафа"));
+  assert.equal(pages.length, a.state.cabinets.length);
+  const transform = pages[0].children[1].children[0].style.transform;
+  const scale = Number(transform.match(/scale\(([^)]+)\)/)[1]);
+  assert.ok(scale > 0 && scale < 0.7);
+  for (const page of pages) assert.doesNotMatch(page.children[0].textContent, /часть/);
+});
+
+test("device properties save fields, clean invalid ports and removal preserves other devices", () => {
+  const { api: a, nodes } = setup();
+  const cabinet = a.state.cabinets[0], device = cabinet.equipment[0];
+  a.assignCablePort(a.state.cables[0], cabinet, device.id, 8);
+  cabinet.schemeLayout = { scale: 1, positions: { [`device:${device.id}`]: { x: 20, y: 30 } } };
+  a.openEquipmentProperties(cabinet, device);
+  const dialog = nodes.get("#equipment-properties-dialog"), form = dialog.children[0];
+  const fields = new Map(form.children.filter(child => child.className === "field").map(label => [label.children[1].id, label.children[1]]));
+  fields.get("equipment-properties-model").value = "New model";
+  fields.get("equipment-properties-ports").value = "4";
+  form.handlers.submit({ preventDefault() {} });
+  assert.equal(device.model, "New model");
+  assert.equal(device.ports, "4");
+  assert.equal(a.state.cables[0].targetConnection, null);
+  assert.equal(dialog.open, false);
+  a.removeEquipment(cabinet, device.id);
+  assert.equal(cabinet.equipment.length, 0);
+  assert.equal(cabinet.schemeLayout.positions[`device:${device.id}`], undefined);
+  assert.equal(a.state.cabinets[1].equipment.length, 1);
+  a.undo();
+  assert.equal(a.state.cabinets[0].equipment.length, 1);
+});
+
+test("free cable endpoints bind to objects, follow them and survive reopening", () => {
+  const { api: a } = setup();
+  const cable = { id: "cable4", type: "copper", sourceKind: "point", sourceId: "point", sourcePoint: { x: 12, y: 10 }, routePoints: [{ x: 50, y: 50 }, { x: 80, y: 80 }], viaMountIds: [], targetCabinetId: null };
+  a.state.cables.push(cable);
+  assert.equal(a.bindCableEndpoint(cable, "source", cable.sourcePoint), true);
+  assert.equal(cable.sourceKind, "camera");
+  assert.equal(cable.sourceId, "c1");
+  assert.equal(a.bindCableEndpoint(cable, "target", cable.routePoints.at(-1)), true);
+  assert.equal(cable.targetCabinetId, "cabinet2");
+  assert.equal(cable.routePoints.length, 1);
+  a.state.cameras[0].x = 17;
+  assert.equal(a.cableRouteNodes(cable)[0].x, 17);
+  const loaded = a.normalizeProject({ format: "camera-map-project", version: 1, project: a.projectContent() });
+  assert.equal(loaded.cables.at(-1).targetCabinetId, "cabinet2");
+  const reverse = { ...cable, sourceKind: "cabinet", sourceId: "cabinet2", targetCabinetId: null, routePoints: [{ x: 20, y: 20 }] };
+  assert.equal(a.bindCableEndpoint(reverse, "target", reverse.routePoints[0]), true);
+  assert.equal(reverse.targetCameraId, "c2");
+  a.state.cables[3] = reverse;
+  assert.equal(a.normalizeProject({ format: "camera-map-project", version: 1, project: a.projectContent() }).cables[3].targetCameraId, "c2");
+});
+
+test("keyboard leaves text, selects and modal forms to native editing", () => {
+  const { api: a, document } = setup();
+  a.state.selectedCameraId = "c1";
+  let prevented = false;
+  for (const key of ["Delete", "z", "y", "Enter"]) {
+    document.handlers.keydown({ key, ctrlKey: true, target: { closest() { return {}; } }, preventDefault() { prevented = true; } });
+  }
+  assert.equal(prevented, false);
+  assert.equal(a.state.cameras.length, 2);
+});
+
+test("saved viewport is restored instead of fitting the whole map", async () => {
+  const { api: a } = setup({ fileIO: true });
+  a.state.view = { x: -150, y: -75, scale: 3 };
+  a.state.workspaceSize = { width: 900, height: 600 };
+  const payload = { format: "camera-map-project", version: 1, project: a.projectContent() };
+  a.state.view = { x: 0, y: 0, scale: 1 };
+  await a.openProject({ name: "viewport.cmap", text: async () => JSON.stringify(payload) });
+  assert.equal(a.state.view.x, -150);
+  assert.equal(a.state.view.y, -75);
+  assert.equal(a.state.view.scale, 3);
+  assert.equal(a.state.fitted, false);
+  delete payload.project.settings.viewport;
+  assert.equal(a.normalizeProject(payload).settings.viewport, null);
 });
