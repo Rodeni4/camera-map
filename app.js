@@ -314,6 +314,8 @@
     { id: "poe-switch", name: "PoE-коммутатор", icon: "P" },
     { id: "nvr", name: "Видеорегистратор", icon: "●" },
     { id: "optical-cross", name: "Оптический кросс", icon: "✣" },
+    { id: "media-converter", name: "Медиаконвертер оптический", icon: "⇄" },
+    { id: "fiber-closure", name: "Оптическая муфта", icon: "▰" },
     { id: "optical-device", name: "Оптическое устройство", icon: "⇄" },
     { id: "other", name: "Другое оборудование", icon: "◇" },
   ];
@@ -353,6 +355,7 @@
         ip: item.ip,
         ports: item.ports,
         uplinkPorts: item.uplinkPorts ?? (item.type === "poe-switch" ? "2" : "0"),
+        ...(item.type === "media-converter" ? { converterSide: ["A", "B"].includes(item.converterSide) ? item.converterSide : "" } : {}),
         faultyPorts: validFaultyPorts(item),
         note: item.note,
         modelImage: item.modelImage || "",
@@ -394,8 +397,8 @@
         ...cable, viaMountIds: [...cable.viaMountIds],
         sourcePoint: cable.sourcePoint ? { ...cable.sourcePoint } : null,
         routePoints: cable.routePoints?.map((point) => ({ ...point })),
-        targetConnection: validPortConnection(cable.targetConnection, getCabinet(cable.targetCabinetId)),
-        sourceConnection: cable.sourceKind === "cabinet" ? validPortConnection(cable.sourceConnection, getCabinet(cable.sourceId)) : null,
+        targetConnection: getCabinet(cable.targetCabinetId) ? cablePortConnection(cable, getCabinet(cable.targetCabinetId)) : null,
+        sourceConnection: cable.sourceKind === "cabinet" && getCabinet(cable.sourceId) ? cablePortConnection(cable, getCabinet(cable.sourceId)) : null,
       })),
     };
   }
@@ -592,6 +595,9 @@
       model: "",
       ip: "",
       ports: "",
+      ...(type.id === "optical-cross" ? { ports: "4", uplinkPorts: "1" } : {}),
+      ...(type.id === "media-converter" ? { ports: "1", uplinkPorts: "1", converterSide: "" } : {}),
+      ...(type.id === "fiber-closure" ? { ports: "2", uplinkPorts: "0" } : {}),
       note: "",
     };
     equipmentList.push(equipment);
@@ -609,6 +615,26 @@
     if (cabinet.schemeLayout?.positions) delete cabinet.schemeLayout.positions[`device:${equipmentId}`];
     schemeSelection = null; selectedSchemeWire = null; selectedSchemeDevice = null;
     recordHistory(); refreshDirtyState(); renderCabinetScheme();
+  }
+
+  function cloneEquipment(cabinet, device) {
+    const ids = new Set(state.cabinets.flatMap((node) => cabinetEquipment(node)).map((item) => item.id));
+    let id;
+    do { id = `equipment${state.nextEquipmentId++}`; } while (ids.has(id));
+    const clone = { ...device, id, name: `${device.name || equipmentType(device.type).name} — копия`, ip: "", faultyPorts: [] };
+    cabinetEquipment(cabinet).push(clone);
+    const layout = normalizeSchemeLayout(cabinet.schemeLayout);
+    const source = layout.positions[`device:${device.id}`] || { x: 360, y: 24 };
+    const point = { x: source.x, y: source.y + 160 };
+    while (Object.values(layout.positions).some((position) => Math.abs(position.x - point.x) < 100 && Math.abs(position.y - point.y) < 120) && point.y < 19800) point.y += 160;
+    layout.positions[`device:${id}`] = point; cabinet.schemeLayout = layout;
+    selectedInventoryEquipmentId = id;
+    selectedSchemeDevice = { kind: "equipment", cabinetId: cabinet.id, id };
+    schemeSelection = null; selectedSchemeWire = null;
+    refreshDirtyState(); recordHistory();
+    if (state.activeWorkspace === "equipment") { equipmentSearch.value = ""; renderEquipment(); }
+    else renderCabinetScheme();
+    return clone;
   }
 
   function getCable(id) {
@@ -750,18 +776,28 @@
 
   function buildCableBundles() {
     const segments = new Map();
-    state.cables.forEach((cable) => {
-      const nodes = cableRouteNodes(cable);
+    const routes = state.cables.map((cable) => ({ cable, nodes: cableRouteNodes(cable) }));
+    const points = [...new Map(routes.flatMap(({ nodes }) => nodes).map((point) => [`${point.x}:${point.y}`, point])).values()];
+    const coordinateKey = (point) => `point:${point.x}:${point.y}`;
+    routes.forEach(({ cable, nodes }) => {
       for (let index = 0; index < nodes.length - 1; index += 1) {
         const first = nodes[index];
         const second = nodes[index + 1];
-        const [start, end] = first.key < second.key ? [first, second] : [second, first];
-        const key = `${start.key}|${end.key}`;
-        if (!segments.has(key)) segments.set(key, { key, start, end, types: new Map() });
-        const segment = segments.get(key);
-        if (!segment.types.has(cable.type)) segment.types.set(cable.type, []);
-        const cableIds = segment.types.get(cable.type);
-        if (!cableIds.includes(cable.id)) cableIds.push(cable.id);
+        const dx = second.x - first.x, dy = second.y - first.y, lengthSquared = dx * dx + dy * dy;
+        if (!lengthSquared) continue;
+        const cuts = points.map((point) => ({ point, t: ((point.x - first.x) * dx + (point.y - first.y) * dy) / lengthSquared }))
+          .filter(({ point, t }) => t >= 0 && t <= 1 && Math.abs((point.x - first.x) * dy - (point.y - first.y) * dx) <= 1e-6 * Math.sqrt(lengthSquared))
+          .sort((a, b) => a.t - b.t);
+        for (let part = 0; part < cuts.length - 1; part += 1) {
+          const a = cuts[part].point, b = cuts[part + 1].point;
+          const [start, end] = coordinateKey(a) < coordinateKey(b) ? [a, b] : [b, a];
+          const key = `${coordinateKey(start)}|${coordinateKey(end)}`;
+          if (!segments.has(key)) segments.set(key, { key, start, end, types: new Map() });
+          const segment = segments.get(key);
+          if (!segment.types.has(cable.type)) segment.types.set(cable.type, []);
+          const cableIds = segment.types.get(cable.type);
+          if (!cableIds.includes(cable.id)) cableIds.push(cable.id);
+        }
       }
     });
 
@@ -824,7 +860,7 @@
     if (!bundle.cableIds.includes(state.selectedCableId)) return;
     const pathData = cableBundlePath(bundle);
     if (!pathData) return;
-    const line = makeSvg("path", { d: pathData, "data-cable-id": state.selectedCableId });
+    const line = makeSvg("path", { d: pathData, "data-cable-id": state.selectedCableId, "data-medium": bundle.type });
     line.classList.add("cable-line", "is-selected");
     svg.append(line);
   }
@@ -897,6 +933,21 @@
     bundles.forEach((bundle) => appendCableBundleLine(svg, bundle));
     bundles.forEach((bundle) => appendSelectedCableLine(svg, bundle));
     bundles.forEach((bundle) => appendCableBundleHit(svg, bundle));
+    const turns = new Map();
+    state.cables.forEach((cable) => (cable.routePoints || []).filter((point) => !point.mountId).forEach((point) => turns.set(`${point.x}:${point.y}`, point)));
+    turns.forEach((point) => {
+      const circle = makeSvg("circle", { cx: point.x, cy: point.y, r: 3 / state.view.scale });
+      circle.classList.add("cable-turn");
+      if (state.activeTool === "cable") {
+        circle.classList.add("is-connectable");
+        if (state.cableDraft?.cursor?.x === point.x && state.cableDraft?.cursor?.y === point.y) circle.classList.add("is-snap-target");
+        circle.addEventListener("pointerdown", (event) => {
+          if (event.button !== 0) return;
+          event.preventDefault(); event.stopPropagation(); addCablePoint(point);
+        });
+      }
+      svg.append(circle);
+    });
 
     if (state.cableDraft) {
       const nodes = cableRouteNodes(state.cableDraft);
@@ -1130,6 +1181,7 @@
   const equipmentTab = document.querySelector("#equipment-tab");
   const equipmentPanel = document.querySelector("#equipment-panel");
   const equipmentSearch = document.querySelector("#equipment-search");
+  let selectedInventoryEquipmentId = null;
   const equipmentGroups = document.querySelector("#equipment-groups");
 
   function switchWorkspace(tab) {
@@ -1164,6 +1216,10 @@
     document.querySelector('.workspace-tabs [aria-selected="true"]')?.focus();
   });
   equipmentSearch.addEventListener("input", renderEquipment);
+  document.querySelector("#clone-equipment").addEventListener("click", () => {
+    const cabinet = state.cabinets.find((node) => cabinetEquipment(node).some((item) => item.id === selectedInventoryEquipmentId));
+    if (cabinet) cloneEquipment(cabinet, cabinetEquipment(cabinet).find((item) => item.id === selectedInventoryEquipmentId));
+  });
 
   function openCabinetScheme(id) {
     if (!getCabinet(id)) return;
@@ -1224,6 +1280,9 @@
   }
 
   function equipmentPorts(item) {
+    if (item.type === "media-converter") return 1;
+    if (item.type === "optical-cross" && (item.ports == null || item.ports === "")) return 4;
+    if (item.type === "fiber-closure" && (item.ports == null || item.ports === "")) return 2;
     return clamp(Math.floor(Number(item.ports) || 0), 0, 512);
   }
 
@@ -1236,7 +1295,15 @@
   }
 
   function cablePortConnection(cable, cabinet) {
-    return validPortConnection(cable[connectionKey(cable, cabinet)], cabinet);
+    const connection = validPortConnection(cable[connectionKey(cable, cabinet)], cabinet);
+    const medium = connection && converterPortMedium(cabinet, connection);
+    return medium && medium !== cable.type ? null : connection;
+  }
+
+  function converterPortMedium(cabinet, connection) {
+    const device = cabinetEquipment(cabinet).find((item) => item.id === connection.equipmentId);
+    if (device?.type === "optical-cross" || device?.type === "fiber-closure") return "fiber";
+    return device?.type === "media-converter" ? connection.port === 1 ? "copper" : "fiber" : null;
   }
 
   function assignCablePort(cable, cabinet, equipmentId, port) {
@@ -1245,6 +1312,8 @@
     if (!equipmentId) { cable[key] = null; return ""; }
     const connection = validPortConnection({ equipmentId, port: Number(port) }, cabinet);
     if (!connection) return "Выберите устройство и доступный порт.";
+    const medium = converterPortMedium(cabinet, connection);
+    if (medium && medium !== cable.type) return "Витая пара подключается к ETH, оптика — к OPT или оптическому вводу.";
     const occupied = cabinetCables(cabinet).some((other) => {
       const assigned = cablePortConnection(other, cabinet);
       return other !== cable && assigned?.equipmentId === connection.equipmentId && assigned.port === connection.port;
@@ -1256,6 +1325,9 @@
   }
 
   function equipmentUplinks(item) {
+    if (item.type === "fiber-closure") return 0;
+    if (item.type === "optical-cross") return 1;
+    if (item.type === "media-converter") return 1;
     return clamp(Math.floor(Number(item.uplinkPorts ?? (item.type === "poe-switch" ? 2 : 0)) || 0), 0, 32);
   }
 
@@ -1276,6 +1348,8 @@
     return (Array.isArray(cabinet.internalConnections) ? cabinet.internalConnections : []).flatMap((link, index) => {
       const from = validPortConnection(link?.from, cabinet), to = validPortConnection(link?.to, cabinet);
       if (!from || !to || from.equipmentId === to.equipmentId || occupied.has(key(from)) || occupied.has(key(to))) return [];
+      const a = converterPortMedium(cabinet, from), b = converterPortMedium(cabinet, to);
+      if (a && b && a !== b) return [];
       occupied.add(key(from)); occupied.add(key(to));
       return [{ id: typeof link.id === "string" ? link.id.slice(0, 100) : `internal-${index}`, from, to }];
     });
@@ -1285,6 +1359,8 @@
     from = validPortConnection(from, cabinet); to = validPortConnection(to, cabinet);
     if (!from || !to) return "Выберите два существующих порта.";
     if (from.equipmentId === to.equipmentId) return "Выберите порт другого устройства.";
+    const a = converterPortMedium(cabinet, from), b = converterPortMedium(cabinet, to);
+    if (a && b && a !== b) return "Соедините однотипные порты: ETH с ETH или OPT с OPT.";
     const links = validInternalConnections(cabinet);
     const occupied = (end) => cabinetCables(cabinet).some((cable) => samePort(cablePortConnection(cable, cabinet), end)) ||
       links.some((link) => samePort(link.from, end) || samePort(link.to, end));
@@ -1294,6 +1370,9 @@
   }
 
   function portLabel(device, port) {
+    if (device.type === "fiber-closure") return `OPT ${port}`;
+    if (device.type === "optical-cross") return port > 512 ? "Ввод кабеля" : `OPT ${port}`;
+    if (device.type === "media-converter") return port === 1 ? "ETH" : "OPT";
     return port > 512 ? `Uplink ${port - 512}` : `${device.type === "poe-switch" ? "PoE " : "Порт "}${port}`;
   }
 
@@ -1448,6 +1527,12 @@
     deleteDevice.textContent = deleteLabel(selectedSchemeDevice?.kind);
     deleteDevice.hidden = !selectedSchemeDevice;
     toolbar.append(deleteDevice);
+    const cloneDevice = button("Клонировать", () => {
+      const device = devices.find((item) => item.id === selectedSchemeDevice?.id);
+      if (selectedSchemeDevice?.kind === "equipment" && device) cloneEquipment(cabinet, device);
+    });
+    cloneDevice.hidden = selectedSchemeDevice?.kind !== "equipment";
+    toolbar.append(cloneDevice);
     const deleteWire = button("Удалить выбранную связь", () => {
       const selected = selectedSchemeWire;
       if (!selected) return;
@@ -1478,6 +1563,7 @@
       card.classList.add("is-selected");
       cancelSelection.hidden = false; deleteDevice.hidden = false; deleteWire.hidden = true;
       deleteDevice.textContent = deleteLabel(selection.kind);
+      cloneDevice.hidden = selection.kind !== "equipment";
       status.textContent = cableId ? `${label} · Выберите порт для подключения` : label;
     }
     let boardWidth = 1600, boardHeight = 1000;
@@ -1587,6 +1673,18 @@
       const el = button(text, () => pick(end), `scheme-pin${used ? " is-used" : ""}${faulty ? " is-faulty" : ""}${selected ? " is-selected" : ""}`);
       el.style.left = `${x}px`; el.style.top = `${y}px`;
       if (socket) { el.className += " scheme-pin--socket"; el.textContent = end.port > 512 ? `U${end.port - 512}` : String(end.port); }
+      if (socket && devices.find((device) => device.id === end.equipmentId)?.type === "media-converter") {
+        el.textContent = end.port === 1 ? "ETH" : "OPT";
+        if (end.port > 512) el.className += " scheme-pin--optical";
+      }
+      if (socket && devices.find((device) => device.id === end.equipmentId)?.type === "optical-cross") {
+        el.textContent = end.port > 512 ? "Ввод" : String(end.port);
+        el.className += end.port > 512 ? " scheme-pin--cable-entry" : " scheme-pin--optical";
+      }
+      if (socket && devices.find((device) => device.id === end.equipmentId)?.type === "fiber-closure") {
+        el.textContent = `OPT ${end.port}`;
+        el.className += " scheme-pin--optical";
+      }
       el.title = faulty ? `${text}: неисправен` : text;
       el.setAttribute("aria-pressed", String(Boolean(selected)));
       el.setAttribute("aria-label", end.kind === "cable" ? text : `${devices.find((item) => item.id === end.equipmentId)?.name || "Устройство"}: ${text}${faulty ? ", неисправен" : used ? ", занят" : ", свободен"}`);
@@ -1598,6 +1696,7 @@
       const y = 24 + index * 132;
       const source = cable.targetCabinetId === cabinet.id ? endpointName(cable.sourceKind, cable.sourceId) : endpointName(cable.targetCameraId ? "camera" : "cabinet", cable.targetCameraId || cable.targetCabinetId);
       const card = node("article", "", "scheme-node scheme-node--external");
+      card.dataset.connected = String(Boolean(cablePortConnection(cable, cabinet)));
       card.style.left = "20px"; card.style.top = `${y}px`;
       const remoteKind = cable.targetCabinetId === cabinet.id ? cable.sourceKind : cable.targetCameraId ? "camera" : cable.targetCabinetId ? "cabinet" : "point";
       const camera = remoteKind === "camera" ? getCamera(cable.targetCabinetId === cabinet.id ? cable.sourceId : cable.targetCameraId) : null;
@@ -1649,9 +1748,9 @@
         const selectDevice = () => {
           selectBlock(card, { kind: "equipment", id: device.id }, device.name || equipmentType(device.type).name);
         };
-        card.addEventListener("click", (event) => { if (!event.target.closest("input, button")) selectDevice(); });
+        card.addEventListener("click", (event) => { if (!event.target.closest("input, button, select")) selectDevice(); });
         card.addEventListener("dblclick", (event) => {
-          if (event.target.closest("input, button")) return;
+          if (event.target.closest("input, button, select")) return;
           event.preventDefault(); revealEquipmentDescription(device.id);
         });
         card.addEventListener("keydown", (event) => {
@@ -1661,7 +1760,11 @@
         });
       }
       const config = node("div", "", "scheme-port-config");
-      [["ports", device.type === "poe-switch" ? "PoE" : "Порты", main, 512], ["uplinkPorts", "Uplink", uplinks, 32]].forEach(([field, title, value, max]) => {
+      if (device.type === "media-converter" && device.converterSide) {
+        const badge = node("span", device.converterSide, "scheme-converter-ray");
+        badge.setAttribute("aria-label", "A/B: " + device.converterSide); card.append(badge);
+      }
+      (device.type === "media-converter" ? [] : ["optical-cross", "fiber-closure"].includes(device.type) ? [["ports", "OPT", main, 512]] : [["ports", device.type === "poe-switch" ? "PoE" : "Порты", main, 512], ["uplinkPorts", "Uplink", uplinks, 32]]).forEach(([field, title, value, max]) => {
         const label = node("label", `${title} `), input = node("input"); input.type = "number"; input.min = "0"; input.max = String(max); input.value = String(value);
         input.id = `scheme-${cabinet.id}-${device.id}-${field}`;
         input.addEventListener("change", () => {
@@ -1672,12 +1775,14 @@
         });
         label.append(input); config.append(label);
       });
+      if (device.type === "optical-cross") config.append(node("span", "Ввод: 1"));
       card.append(config); board.append(card);
       const used = (port) => cables.some((cable) => samePort(cablePortConnection(cable, cabinet), { equipmentId: device.id, port })) || links.some((link) => [link.from, link.to].some((end) => samePort(end, { equipmentId: device.id, port })));
-      const portCaption = node("span", device.type === "poe-switch" ? "PoE / RJ45" : "Порты", "scheme-uplink-caption"); portCaption.style.left = `${x + 16}px`; portCaption.style.top = `${y + 40}px`; board.append(portCaption);
+      card.dataset.connected = String(Array.from({ length: main }, (_, index) => index + 1).some(used) || Array.from({ length: uplinks }, (_, index) => index + 513).some(used));
+      const portCaption = node("span", ["optical-cross", "fiber-closure"].includes(device.type) ? "OPT" : device.type === "media-converter" ? "ETH / RJ45" : device.type === "poe-switch" ? "PoE / RJ45" : "Порты", "scheme-uplink-caption"); portCaption.style.left = `${x + 16}px`; portCaption.style.top = `${y + 40}px`; board.append(portCaption);
       for (let i = 0; i < main; i += 1) pin({ kind: "port", equipmentId: device.id, port: i + 1 }, portLabel(device, i + 1), x + 16 + i * 58, y + 60, used(i + 1), true);
       if (uplinks) {
-        const caption = node("span", "UPLINK", "scheme-uplink-caption"); caption.style.left = `${x + 48 + main * 58}px`; caption.style.top = `${y + 40}px`; board.append(caption);
+        const caption = node("span", device.type === "optical-cross" ? "КАБЕЛЬ" : device.type === "media-converter" ? "OPT" : "UPLINK", "scheme-uplink-caption"); caption.style.left = `${x + 48 + main * 58}px`; caption.style.top = `${y + 40}px`; board.append(caption);
         for (let i = 0; i < uplinks; i += 1) pin({ kind: "port", equipmentId: device.id, port: 513 + i }, portLabel(device, 513 + i), x + 48 + main * 58 + i * 58, y + 60, used(513 + i), true);
       }
       movable(`device:${device.id}`, card, x, y, width, height, [...board.children].slice(elementStart), [...anchors.keys()].filter((key) => !oldAnchors.has(key)));
@@ -1688,6 +1793,8 @@
       const route = routeSchemeWire(a, b, blocks, lane);
       const halo = makeSvg("path", { d: route, class: "scheme-wire-halo" });
       const path = makeSvg("path", { d: route, class: `scheme-wire${selectedSchemeWire?.kind === kind && selectedSchemeWire?.id === id ? " is-selected" : ""}`, tabindex: "0", role: "button", "aria-label": title });
+      const optical = kind === "cable" ? getCable(id)?.type === "fiber" : converterPortMedium(cabinet, from) === "fiber" || converterPortMedium(cabinet, to) === "fiber";
+      path.setAttribute("data-medium", optical ? "fiber" : "copper");
       const colors = ["#2563eb", "#0891b2", "#7c3aed", "#d97706", "#059669", "#db2777", "#475569"];
       const colorIndex = [...`${kind}:${id}`].reduce((sum, character) => sum + character.charCodeAt(0), 0) % colors.length;
       path.style.setProperty("--wire-color", colors[colorIndex]);
@@ -1756,11 +1863,12 @@
   function inventoryColumns(entry) {
     const { kind, item } = entry;
     const columns = [{ key: "name", title: "Название" }];
-    if (kind !== "camera" && kind !== "cabinet") columns.push({ key: "location", title: "Расположение", readOnly: true, value: (entry) => entry.location });
-    if (kind === "camera" || kind === "equipment" || kind === "mount") columns.push(
+    if (kind === "equipment" && item.type === "media-converter") columns.push({ key: "converterSide", title: "Луч", options: [["", "Не указан"], ["A", "A"], ["B", "B"]] });
+    if (kind !== "camera" && kind !== "cabinet" && kind !== "mount") columns.push({ key: "location", title: "Расположение", readOnly: true, value: (entry) => entry.location });
+    if (kind === "camera" || kind === "equipment") columns.push(
       { key: "model", title: "Модель", readOnly: kind === "mount" },
       { key: "ip", title: "IP-адрес", readOnly: kind === "mount" },
-      { key: kind === "camera" ? "mac" : "ports", title: "MAC / Порты", readOnly: kind === "mount" });
+      { key: kind === "camera" ? "mac" : "ports", title: "MAC / Порты", readOnly: item.type === "media-converter", ...(item.type === "media-converter" ? { value: () => "1 ETH + 1 OPT" } : {}) });
     if (kind === "cable") {
       columns.push({ key: "cableSpecification", title: "Тип" });
       if (item.type === "copper") columns.push({ key: "installation", title: "Прокладка", options: [["", "Не указано"], ["outdoor", "Уличная"], ["indoor", "Внутренняя"]], value: (entry) => entry.item.installation === "outdoor" ? "Уличная" : entry.item.installation === "indoor" ? "Внутренняя" : "" });
@@ -1772,6 +1880,7 @@
 
   function renderEquipment() {
     const entries = inventoryEntries();
+    document.querySelector("#clone-equipment").disabled = !entries.some((entry) => entry.kind === "equipment" && entry.item.id === selectedInventoryEquipmentId);
     const query = equipmentSearch.value.trim().toLocaleLowerCase("ru");
     const filtered = entries.filter((entry) => [entry.type, entry.location, entry.item.name, entry.item.model, entry.item.ip, entry.item.mac, entry.item.note, entry.item.cableSpecification, entry.item.lengthMeters,
       entry.item.installation === "outdoor" ? "уличная" : entry.item.installation === "indoor" ? "внутренняя" : ""]
@@ -1813,6 +1922,14 @@
       items.forEach((entry) => {
         const { item, kind } = entry;
         const row = body.insertRow();
+        row.dataset.equipmentId = kind === "equipment" ? item.id : "";
+        row.classList.toggle("is-selected", kind === "equipment" && item.id === selectedInventoryEquipmentId);
+        row.addEventListener("click", () => {
+          selectedInventoryEquipmentId = kind === "equipment" ? item.id : null;
+          equipmentGroups.querySelectorAll("tr.is-selected").forEach((node) => node.classList.remove("is-selected"));
+          if (kind === "equipment") row.classList.add("is-selected");
+          document.querySelector("#clone-equipment").disabled = kind !== "equipment";
+        });
         function field(key, label, multiline = false) {
           const cell = row.insertCell();
           const input = document.createElement(multiline ? "textarea" : "input");
@@ -1847,7 +1964,9 @@
               const option = document.createElement("option"); option.value = value; option.textContent = label; select.append(option);
             });
             select.value = item[column.key] || "";
-            select.addEventListener("change", () => { item[column.key] = select.value; });
+            select.addEventListener("change", () => {
+              item[column.key] = select.value;
+            });
             cell.append(select);
           } else field(column.key, column.title, column.multiline);
         });
@@ -2701,6 +2820,30 @@
     selectCabinet(cabinet.id);
   }
 
+  function snapCablePoint(point) {
+    let nearest = null, distance = 12 / state.view.scale;
+    state.cables.forEach((cable) => (cable.routePoints || []).forEach((turn) => {
+      if (turn.mountId) return;
+      const candidate = Math.hypot(point.x - turn.x, point.y - turn.y);
+      if (candidate <= distance) { nearest = turn; distance = candidate; }
+    }));
+    return nearest ? { x: nearest.x, y: nearest.y } : { x: point.x, y: point.y };
+  }
+
+  function addCablePoint(rawPoint) {
+    if (state.pendingCableSourceId || !isInsideMap(rawPoint)) return;
+    const point = snapCablePoint(rawPoint);
+    if (!state.cableDraft) {
+      state.cableDraft = { type: "copper", sourceKind: "point", sourceId: "point", sourcePoint: point, viaMountIds: [], routePoints: [], targetCabinetId: null };
+    } else {
+      const nodes = cableRouteNodes(state.cableDraft);
+      const last = nodes[nodes.length - 1];
+      if (Math.hypot(last.x - point.x, last.y - point.y) * state.view.scale > 2) state.cableDraft.routePoints.push(point);
+      state.cableDraft.cursor = point;
+    }
+    updateCablePlacementHint(); renderObjects();
+  }
+
   function updateCablePlacementHint(message = "") {
     if (message) {
       elements.placementHint.textContent = message;
@@ -3004,6 +3147,9 @@
           ip: limitedText(equipmentItem?.ip),
           ports: limitedText(equipmentItem?.ports, "", 20),
           uplinkPorts: String(clamp(Math.floor(Number(equipmentItem?.uplinkPorts ?? (equipmentItem?.type === "poe-switch" ? 2 : 0)) || 0), 0, 32)),
+          ...(equipmentItem?.type === "optical-cross" ? { ports: limitedText(equipmentItem?.ports, "4", 20) || "4", uplinkPorts: "1" } : {}),
+          ...(equipmentItem?.type === "fiber-closure" ? { ports: limitedText(equipmentItem?.ports, "2", 20) || "2", uplinkPorts: "0" } : {}),
+          ...(equipmentItem?.type === "media-converter" ? { ports: "1", uplinkPorts: "1", converterSide: ["A", "B"].includes(equipmentItem.converterSide) ? equipmentItem.converterSide : "" } : {}),
           faultyPorts: Array.isArray(equipmentItem?.faultyPorts) ? equipmentItem.faultyPorts.filter((port) => Number.isInteger(port) && port > 0 && port <= 544) : [],
           note: limitedText(equipmentItem?.note),
           modelImage: normalizeObjectImage(equipmentItem?.modelImage),
@@ -3066,6 +3212,9 @@
       [["targetConnection", cable.targetCabinetId], ["sourceConnection", cable.sourceId]].forEach(([key, cabinetId]) => {
         const connection = cable[key];
         if (!connection) return;
+        const cabinet = cabinets.find((item) => item.id === cabinetId);
+        const medium = cabinet && converterPortMedium(cabinet, connection);
+        if (medium && medium !== cable.type) { cable[key] = null; return; }
         const portKey = `${cabinetId}:${connection.equipmentId}:${connection.port}`;
         if (occupiedPorts.has(portKey)) cable[key] = null;
         else occupiedPorts.add(portKey);
@@ -3654,6 +3803,7 @@
       if (cameraControl) handleCableNode("camera", cameraControl.dataset.cameraId);
       else if (mountControl) handleCableNode("mount", mountControl.dataset.mountId);
       else if (cabinetControl) handleCableNode("cabinet", cabinetControl.dataset.cabinetId);
+      else if (cableHit) addCablePoint(workspacePoint(event.clientX, event.clientY));
       return;
     }
 
@@ -3751,8 +3901,12 @@
       if (!cable) return;
       const point = workspacePoint(event.clientX, event.clientY);
       const vertex = interaction.field === "routePoints" ? cable.routePoints[interaction.index] : cable[interaction.field];
-      vertex.x = clamp(point.x, 0, state.imageWidth);
-      vertex.y = clamp(point.y, 0, state.imageHeight);
+      const shared = state.cables.flatMap((item) => [item.sourceKind === "point" ? item.sourcePoint : null, ...(item.routePoints || [])])
+        .filter((turn) => turn && !turn.mountId && turn.x === vertex.x && turn.y === vertex.y);
+      shared.forEach((turn) => {
+        turn.x = clamp(point.x, 0, state.imageWidth);
+        turn.y = clamp(point.y, 0, state.imageHeight);
+      });
     } else if (interaction.type === "moveMount") {
       const mount = getMount(interaction.mountId);
       if (!mount) return;
@@ -3843,17 +3997,7 @@
     if (state.activeTool) {
       event.preventDefault();
       if (state.activeTool === "cable") {
-        if (state.pendingCableSourceId) return;
-        const point = workspacePoint(event.clientX, event.clientY);
-        if (!isInsideMap(point)) return;
-        if (!state.cableDraft) {
-          state.cableDraft = { type: "copper", sourceKind: "point", sourceId: "point", sourcePoint: point, viaMountIds: [], routePoints: [], targetCabinetId: null };
-        } else {
-          const nodes = cableRouteNodes(state.cableDraft);
-          const last = nodes[nodes.length - 1];
-          if (Math.hypot(last.x - point.x, last.y - point.y) * state.view.scale > 2) state.cableDraft.routePoints.push(point);
-        }
-        updateCablePlacementHint(); renderObjects();
+        addCablePoint(workspacePoint(event.clientX, event.clientY));
         return;
       }
       const point = workspacePoint(event.clientX, event.clientY);
@@ -3875,7 +4019,7 @@
   elements.workspace.addEventListener("pointermove", (event) => {
     if (state.activeTool === "cable" && state.cableDraft) {
       const point = workspacePoint(event.clientX, event.clientY);
-      state.cableDraft.cursor = { x: clamp(point.x, 0, state.imageWidth), y: clamp(point.y, 0, state.imageHeight) };
+      state.cableDraft.cursor = snapCablePoint({ x: clamp(point.x, 0, state.imageWidth), y: clamp(point.y, 0, state.imageHeight) });
       renderObjects();
     }
     if (!state.dragging || event.pointerId !== state.pointerId) return;

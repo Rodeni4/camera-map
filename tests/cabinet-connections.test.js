@@ -80,7 +80,7 @@ function setup({ fileIO = false } = {}) {
       assignInternalConnection, validInternalConnections, equipmentUplinks, normalizeSchemeLayout, routeSchemeWire,
       saveProject, openProject, resetProject, schemeScrollPositions, openCabinetScheme,
       cableRouteNodes, finishCable, setActiveTool, undo, renderEquipment, preparePrintSheet, renderView, renderObjects,
-      removeEquipment, revealEquipmentDescription, bindCableEndpoint, inventoryColumns, syncProperties };
+      removeEquipment, revealEquipmentDescription, bindCableEndpoint, inventoryColumns, syncProperties, buildCableBundles, snapCablePoint, addCablePoint, addEquipment };
   })();`;
   vm.createContext(context);
   vm.runInContext(source, context);
@@ -386,7 +386,7 @@ test("cabinet scheme adds equipment to the active cabinet and keeps it in the pr
   a.resetHistory(); a.renderCabinetScheme();
   const flatten = (element) => [element, ...element.children.flatMap(flatten)];
   const choices = flatten(nodes.get("#cabinet-scheme-panel")).filter((element) => element.dataset.equipmentType);
-  assert.equal(choices.length, 7);
+  assert.equal(choices.length, 9);
   choices.find((element) => element.dataset.equipmentType === "poe-switch").handlers.click();
   const added = a.state.cabinets[0].equipment.at(-1);
   assert.equal(added.id, "equipment3");
@@ -719,4 +719,153 @@ test("properties window drags by its heading, stays within the map and retains i
   popover.handlers.pointerdown(event(600, 330, true));
   popover.handlers.pointermove(event(0, 0));
   assert.equal(popover.style.left, "598px", "interactive heading controls do not start a drag");
+});
+
+test("cable turns snap new routes and overlapping segments remain selectable bundles", () => {
+  const { api: a, nodes } = setup();
+  a.state.cables = [{ id: "cable1", type: "copper", sourceKind: "point", sourceId: "point", sourcePoint: { x: 0, y: 0 }, routePoints: [{ x: 50, y: 0 }, { x: 50, y: 100 }], viaMountIds: [], targetCabinetId: null }];
+  const snapped = a.snapCablePoint({ x: 54, y: 4 });
+  assert.equal(snapped.x, 50); assert.equal(snapped.y, 0);
+  a.setActiveTool("cable");
+  a.addCablePoint({ x: 54, y: 4 });
+  a.addCablePoint({ x: 50, y: 50 });
+  a.addCablePoint({ x: 50, y: 98 });
+  a.state.nextCableId = 2;
+  a.finishCable();
+  const bundles = a.buildCableBundles();
+  const shared = bundles.filter(bundle => bundle.cableIds.length === 2);
+  assert.equal(shared.length, 2, "a bend added by the second cable splits the shared straight segment");
+  assert.ok(shared.every(bundle => bundle.cableIds.includes("cable1") && bundle.cableIds.includes("cable2")));
+  const svg = nodes.get("#objects-layer").children[0];
+  assert.ok(svg.children.some(path => path["data-cable-count"] === 2 && path.style["--cable-width"] === "3px"));
+  const hit = { dataset: { cableIds: "cable1,cable2", cableType: "copper" } };
+  nodes.get("#objects-layer").handlers.pointerdown({
+    button: 0, clientX: 50, clientY: 25, preventDefault() {}, stopPropagation() {},
+    target: { closest(selector) { return selector === ".cable-hit" ? hit : null; } },
+  });
+  const picker = nodes.get("#workspace").children.find(element => element.className === "cable-bundle-picker");
+  assert.equal(picker.children.length, 3);
+  picker.children[2].handlers.click();
+  assert.equal(a.state.selectedCableId, "cable2");
+  a.state.mounts = [{ id: "m1", type: "pole", name: "Pole", x: 10, y: 10 }];
+  assert.deepEqual(Array.from(a.inventoryColumns({ kind: "mount", item: a.state.mounts[0] }), column => column.key), ["name", "note"]);
+});
+
+test("media converter has exactly one ETH and OPT, persists A/B and keeps other devices unchanged", () => {
+  const { api: a, nodes } = setup();
+  const cabinet = a.state.cabinets[0];
+  a.state.nextEquipmentId = 10;
+  const converter = a.addEquipment(cabinet, "media-converter", { render: false });
+  assert.equal(converter.ports, "1"); assert.equal(converter.uplinkPorts, "1");
+  assert.equal(converter.converterSide, "");
+  assert.ok(a.assignCablePort(a.state.cables[2], cabinet, converter.id, 1));
+  assert.equal(a.assignCablePort(a.state.cables[0], cabinet, converter.id, 1), "");
+  assert.ok(a.assignCablePort(a.state.cables[0], cabinet, converter.id, 513));
+  assert.equal(a.assignCablePort(a.state.cables[2], cabinet, converter.id, 513), "");
+  a.state.activeWorkspace = "cabinet:cabinet1";
+  a.renderCabinetScheme();
+  const flatten = el => [el, ...el.children.flatMap(flatten)];
+  let elements = flatten(nodes.get("#cabinet-scheme-panel"));
+  assert.equal(elements.some(el => el.id === `scheme-${cabinet.id}-${converter.id}-side`), false);
+  a.renderEquipment();
+  const side = flatten(nodes.get("#equipment-groups")).find(el => el.id === `inventory-equipment-${converter.id}-converterSide`);
+  side.value = "B"; side.handlers.change();
+  a.renderCabinetScheme();
+  assert.equal(converter.converterSide, "B");
+  elements = flatten(nodes.get("#cabinet-scheme-panel"));
+  assert.ok(elements.some(el => el.className?.includes("scheme-pin--optical") && el.textContent === "OPT"));
+  assert.ok(elements.some(el => el.textContent === "ETH" && !el.className?.includes("scheme-pin--optical")));
+  assert.equal(cabinet.equipment[0].type, "poe-switch");
+  const loaded = a.normalizeProject({ format: "camera-map-project", version: 1, project: a.projectContent() });
+  const restored = loaded.cabinets[0].equipment.find(item => item.id === converter.id);
+  assert.equal(restored.converterSide, "B");
+  assert.equal(loaded.cables[2].sourceConnection.port, 513);
+  const print = a.renderCabinetScheme(cabinet, new Element());
+  assert.ok(flatten(print.board).some(el => el.className === "scheme-converter-ray" && el.textContent === "B"));
+});
+
+test("optical cross has a cable entry and configurable OPT ports without Uplink", () => {
+  const { api: a, nodes } = setup();
+  a.state.nextEquipmentId = 10;
+  const cabinet = a.state.cabinets[0];
+  const cross = a.addEquipment(cabinet, "optical-cross", { render: false });
+  assert.equal(cross.ports, "4"); assert.equal(cross.uplinkPorts, "1");
+  assert.ok(a.assignCablePort(a.state.cables[0], cabinet, cross.id, 513));
+  assert.equal(a.assignCablePort(a.state.cables[2], cabinet, cross.id, 513), "");
+  a.state.activeWorkspace = "cabinet:cabinet1";
+  a.renderCabinetScheme();
+  const flatten = el => [el, ...el.children.flatMap(flatten)];
+  const elements = flatten(nodes.get("#cabinet-scheme-panel"));
+  assert.ok(elements.some(el => el.className?.includes("scheme-pin--cable-entry")));
+  assert.equal(elements.filter(el => el.className?.includes("scheme-pin--optical")).length, 4);
+  assert.equal(elements.some(el => el.id === `scheme-${cabinet.id}-${cross.id}-uplinkPorts`), false);
+  const count = elements.find(el => el.id === `scheme-${cabinet.id}-${cross.id}-ports`);
+  count.value = "8"; count.handlers.change();
+  const loaded = a.normalizeProject({ format: "camera-map-project", version: 1, project: a.projectContent() });
+  assert.equal(loaded.cabinets[0].equipment.find(item => item.id === cross.id).ports, "8");
+  assert.equal(loaded.cables[2].sourceConnection.port, 513);
+});
+
+test("fiber closure exposes only configurable OPT ports and connects an optical route", () => {
+  const { api: a, nodes } = setup();
+  const cabinet = a.state.cabinets[0];
+  a.state.nextEquipmentId = 10;
+  const closure = a.addEquipment(cabinet, "fiber-closure", { render: false });
+  const cross = a.addEquipment(cabinet, "optical-cross", { render: false });
+  assert.equal(closure.ports, "2"); assert.equal(closure.uplinkPorts, "0");
+  assert.ok(a.assignCablePort(a.state.cables[0], cabinet, closure.id, 1));
+  assert.equal(a.assignCablePort(a.state.cables[2], cabinet, closure.id, 2), "");
+  assert.equal(a.assignInternalConnection(cabinet, { equipmentId: cross.id, port: 513 }, { equipmentId: closure.id, port: 1 }), "");
+  a.state.activeWorkspace = "cabinet:cabinet1"; a.renderCabinetScheme();
+  const flatten = el => [el, ...el.children.flatMap(flatten)];
+  const elements = flatten(nodes.get("#cabinet-scheme-panel"));
+  assert.ok(elements.some(el => el["aria-label"] === `${closure.name}: OPT 1, занят` && el.className.includes("scheme-pin--optical")));
+  assert.equal(elements.some(el => el.id === `scheme-${cabinet.id}-${closure.id}-uplinkPorts`), false);
+  assert.equal(elements.some(el => el.id === `scheme-${cabinet.id}-${closure.id}-side`), false);
+  const count = elements.find(el => el.id === `scheme-${cabinet.id}-${closure.id}-ports`);
+  count.value = "4"; count.handlers.change();
+  const restored = a.normalizeProject({ format: "camera-map-project", version: 1, project: a.projectContent() });
+  assert.equal(restored.cabinets[0].equipment.find(item => item.id === closure.id).ports, "4");
+  assert.equal(restored.cabinets[0].equipment.find(item => item.id === closure.id).uplinkPorts, "0");
+  assert.equal(restored.cables[2].sourceConnection.port, 2);
+  assert.equal(restored.cabinets[0].internalConnections.length, 1);
+});
+
+test("selected inventory devices clone without connections, network addresses or port faults", () => {
+  const { api: a, nodes } = setup();
+  const cabinet = a.state.cabinets[0], source = cabinet.equipment[0];
+  source.ip = "192.168.1.1"; source.faultyPorts = [2];
+  a.assignCablePort(a.state.cables[0], cabinet, source.id, 1);
+  a.state.activeWorkspace = "equipment"; a.resetHistory(); a.renderEquipment();
+  const flatten = el => [el, ...el.children.flatMap(flatten)];
+  const row = flatten(nodes.get("#equipment-groups")).find(el => el.dataset.equipmentId === source.id);
+  row.handlers.click();
+  assert.equal(nodes.get("#clone-equipment").disabled, false);
+  const cables = JSON.stringify(a.state.cables);
+  nodes.get("#clone-equipment").handlers.click();
+  const clone = cabinet.equipment.at(-1);
+  assert.notEqual(clone.id, source.id);
+  assert.equal(clone.type, source.type);
+  assert.equal(clone.ports, source.ports);
+  assert.equal(clone.ip, ""); assert.equal(clone.faultyPorts.length, 0);
+  assert.equal(JSON.stringify(a.state.cables), cables);
+  a.state.activeWorkspace = "cabinet:cabinet1"; a.renderCabinetScheme();
+  const cards = flatten(nodes.get("#cabinet-scheme-panel")).filter(el => el.className === "scheme-node scheme-node--device");
+  assert.equal(cards[0].dataset.connected, "true");
+  assert.equal(cards.at(-1).dataset.connected, "false");
+  a.undo();
+  assert.equal(a.state.cabinets[0].equipment.length, 1);
+});
+
+test("optical cabinet links carry a distinct line style while Ethernet links remain solid", () => {
+  const { api: a, nodes } = setup();
+  const cabinet = a.state.cabinets[0];
+  a.assignCablePort(a.state.cables[0], cabinet, "equipment1", 1);
+  a.assignCablePort(a.state.cables[2], cabinet, "equipment1", 513);
+  a.state.activeWorkspace = "cabinet:cabinet1"; a.renderCabinetScheme();
+  const flatten = el => [el, ...el.children.flatMap(flatten)];
+  const wires = flatten(nodes.get("#cabinet-scheme-panel")).filter(el => el.class === "scheme-wire");
+  assert.equal(wires.length, 2);
+  assert.ok(wires.some(el => el["data-medium"] === "fiber"));
+  assert.ok(wires.some(el => el["data-medium"] === "copper"));
 });
